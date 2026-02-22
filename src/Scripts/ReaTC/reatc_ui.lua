@@ -1,4 +1,6 @@
 -- ReaTC UI — ReaImGui implementation
+-- @noindex
+-- @version {{VERSION}}
 
 return function(core, outputs, ltc)
   local M = {}
