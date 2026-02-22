@@ -1,27 +1,33 @@
-desc:ReaTC LTC Decoder
+desc:ReaTC LTC Decoder / Generator
 author:ReaTC
 version:{{VERSION}}
 
-// Decodes SMPTE/EBU Linear Timecode (LTC) from audio in real-time.
-// Writes decoded TC to gmem["ReaTC_LTC"] for JSFX-to-JSFX sharing
-// and mirrors values to sliders for Lua readback via TrackFX_GetParam.
+// Dual-mode SMPTE/EBU LTC processor.
 //
-// gmem layout (namespace "ReaTC_LTC"):
-//   [0] valid  — 1 = locked, 0 = no signal
-//   [1] hours  — 0-23
-//   [2] minutes — 0-59
-//   [3] seconds — 0-59
-//   [4] frames  — 0-(fps-1)
-//   [5] seq     — frame counter, increments on each decoded frame (wraps at 65535)
-//   [6] fps_type — 0=24fps  1=25fps  2=29.97DF  3=30fps
+//   Source mode 0 — Transport: generates LTC from REAPER play position.
+//   Source mode 1 — LTC Input: decodes LTC from incoming audio and
+//                               re-clocks / mirrors it on the output.
+//
+// gmem layout — namespace "ReaTC_LTC" (CLAUDE.md protocol):
+//   [0] TC_HOUR          JSFX → Script   hours 0-23
+//   [1] TC_MIN           JSFX → Script   minutes 0-59
+//   [2] TC_SEC           JSFX → Script   seconds 0-59
+//   [3] TC_FRAME         JSFX → Script   frames 0-(fps-1)
+//   [4] TC_FRAMERATE     JSFX → Script   0=24 1=25 2=29.97DF 3=30
+//   [5] TC_PLAY_STATE    JSFX → Script   0=stop 1=play
+//   [6] TC_VALID         JSFX → Script   1=valid 0=invalid/not locked
+//   [7] TC_WRITE_COUNTER JSFX → Script   incremented each @block (staleness)
+//   [8] SCRIPT_ALIVE     Script → JSFX   incremented each Lua defer cycle
 //
 // Slider layout:
-//   slider1-4  hours/minutes/seconds/frames  (output, read by Lua)
-//   slider5    locked flag 0/1               (output, read by Lua)
-//   slider6    sequence counter              (output, read by Lua)
-//   slider7    framerate type               (input,  written by Lua)
-//   slider8    threshold dB                 (input,  written by Lua)
-//   slider9    peak level 0-1               (output, monitoring)
+//   1-4   hours/minutes/seconds/frames  output, Lua reads via TrackFX_GetParam
+//   5     locked flag 0/1              output
+//   6     sequence counter             output
+//   7     framerate type               input, Lua writes on change
+//   8     threshold dB                 input, Lua writes on change
+//   9     peak level 0-1              output (monitoring)
+//   10    source mode                  user-facing: 0=Transport 1=LTC Input
+//   11    output level dBFS            user-facing: LTC generator amplitude
 
 slider1:0<0,23,1>-Hours
 slider2:0<0,59,1>-Minutes
@@ -32,40 +38,147 @@ slider6:0<0,65535,1>-Sequence
 slider7:1<0,3,1{24fps (Film),25fps (EBU),29.97 DF,30fps (SMPTE)}>-Framerate
 slider8:-24<-48,-6,1>-Threshold dB
 slider9:0<0,1,0.001>-Peak Level
+slider10:0<0,1,1{Transport,LTC Input}>-Source Mode
+slider11:-20<-40,0,1>-Output Level dBFS
 
 @init
 
+// ── gmem indices (CLAUDE.md) ──────────────────────────────────────────────
+TC_HOUR=0; TC_MIN=1; TC_SEC=2; TC_FRAME=3;
+TC_FRAMERATE=4; TC_PLAY_STATE=5; TC_VALID=6;
+TC_WRITE_COUNTER=7; SCRIPT_ALIVE=8;
+
 gmem_attach("ReaTC_LTC");
 
-// Bit circular buffer in local memory, indices 0..511
-BIT_BUF = 0;
+// ── Local memory layout ───────────────────────────────────────────────────
+BIT_BUF   = 0;    // decoder ring buffer: 512 cells (indices 0..511)
+GEN_FRAME = 512;  // encoder frame bits: 80 cells (indices 512..591)
 
-// Biphase-mark decoder state
-sig_state = 0;   // current signal polarity: -1, 0 (deadband), 1
-bpm_state = 0;   // 0 = at boundary, 1 = mid-bit of a '1' seen
-stt       = 0;   // samples since last transition
-bit_idx   = 0;   // total bits pushed (use & 511 for buffer index)
+// ── Decoder state ─────────────────────────────────────────────────────────
+sig_state = 0;      // audio polarity: -1 (neg), 0 (deadband), +1 (pos)
+bpm_state = 0;      // biphase-mark state: 0=at boundary, 1=mid-bit '1' seen
+stt       = 0;      // samples since last transition
+bit_idx   = 0;      // total bits pushed; ring index = bit_idx & 511
+valid_samples = 0;  // countdown to lock expiry
+dec_seq   = 0;      // decoded frame counter (wraps 0..65535)
+peak_level = 0;     // peak input amplitude (linear)
 
-// Validity timeout
-valid_samples = 0;   // samples remaining before declaring loss-of-lock
+// Decoded TC (written by decoder, read by @block for LTC mode)
+dec_h=0; dec_m=0; dec_s=0; dec_f=0; dec_valid=0;
 
-// Frame sequence counter and peak level
-seq        = 0;
-peak_level = 0;
+// ── Encoder state ─────────────────────────────────────────────────────────
+// TC to encode (set from transport pos or decoded TC in @block)
+enc_h=0; enc_m=0; enc_s=0; enc_f=0;
+gen_bit_pos = 0;    // current bit in frame (0..79)
+gen_phase   = 0.0;  // fractional phase within current half-bit (0..1)
+gen_half    = 0;    // 0=first half, 1=second half of current bit
+gen_out     = 1.0;  // current output polarity (+1 or -1)
 
-function update_thresholds() (
+// ── gfx state ─────────────────────────────────────────────────────────────
+gfx_prev_alive    = -1;
+gfx_alive_timeout = 0;
+
+// ── Compute derived parameters from sliders ───────────────────────────────
+function update_params() (
   fps_type = floor(slider7);
   fps_int  = fps_type == 0 ? 24 : fps_type == 1 ? 25 : 30;
-  spb      = srate / (fps_int * 80.0);  // samples per LTC bit
-  thr      = 10 ^ (slider8 / 20.0);    // linear amplitude threshold
-  mid      = spb * 0.75;               // short-gap / long-gap boundary
-  minb     = spb * 0.25;               // minimum valid gap
-  maxb     = spb * 1.5;                // maximum valid gap
+
+  // Decoder: amplitude threshold and bit-timing windows
+  thr  = 10 ^ (slider8 / 20.0);
+  spb  = srate / (fps_int * 80.0);   // samples per LTC bit
+  mid  = spb * 0.75;                 // short/long gap boundary
+  minb = spb * 0.25;                 // noise floor
+  maxb = spb * 1.5;                  // framing-lost ceiling
+
+  // Encoder: half-bit phase increment and output amplitude
+  gen_phase_inc = fps_int * 80.0 * 2.0 / srate;  // 2 half-bits per bit
+  enc_amp = 10 ^ (slider11 / 20.0);
 );
 
-// Extract LTC field from bit buffer starting at absolute index 'start',
-// offset 'off' bits, reading 'cnt' bits, LSB-first.
-function extract_bits(start off cnt) local(r i) (
+// ── Non-drop-frame: seconds → TC ─────────────────────────────────────────
+function tc_from_pos_ndf(pos) local(total, ts) (
+  total = floor(pos * fps_int);
+  enc_f = total % fps_int;
+  ts    = floor(total / fps_int);
+  enc_s = ts % 60;
+  ts    = floor(ts / 60);
+  enc_m = ts % 60;
+  enc_h = floor(ts / 60) % 24;
+);
+
+// ── 29.97 drop-frame: seconds → TC ───────────────────────────────────────
+// SMPTE algorithm: skip frames 0 and 1 on every minute that is not a
+// multiple of 10.  Correct for all 24-hour wrap cases.
+function tc_from_pos_df(pos) local(total, d, mm, tf) (
+  total = floor(pos * 30.0);          // nominal 30-fps display frame count
+  d     = floor(total / 17982);       // completed 10-minute blocks
+  mm    = total % 17982;              // frames within current 10-min block
+  tf    = total + 18*d + 2*floor((mm - 2) / 1798);
+  enc_h = floor(tf / 108000) % 24;
+  enc_m = floor(tf / 1800)   % 60;
+  enc_s = floor(tf / 30)     % 60;
+  enc_f = tf % 30;
+);
+
+// ── Build encoder frame (80 bits) from enc_h/m/s/f ───────────────────────
+function build_enc_frame() local(f_u, f_t, s_u, s_t, m_u, m_t, h_u, h_t,
+                                  sw, i, ones) (
+  // Clear
+  i = 0; loop(80, mem[GEN_FRAME + i] = 0; i += 1;);
+
+  // BCD decompose
+  f_u = enc_f % 10; f_t = floor(enc_f / 10);
+  s_u = enc_s % 10; s_t = floor(enc_s / 10);
+  m_u = enc_m % 10; m_t = floor(enc_m / 10);
+  h_u = enc_h % 10; h_t = floor(enc_h / 10);
+
+  // Bits 0-3: frame units
+  mem[GEN_FRAME+0]=(f_u>>0)&1; mem[GEN_FRAME+1]=(f_u>>1)&1;
+  mem[GEN_FRAME+2]=(f_u>>2)&1; mem[GEN_FRAME+3]=(f_u>>3)&1;
+  // Bits 4-7: user bits group 1 — zero
+  // Bits 8-9: frame tens
+  mem[GEN_FRAME+8]=(f_t>>0)&1; mem[GEN_FRAME+9]=(f_t>>1)&1;
+  // Bit 10: drop-frame flag
+  mem[GEN_FRAME+10] = (fps_type == 2) ? 1 : 0;
+  // Bit 11: color frame — zero; bits 12-15: user bits 2 — zero
+  // Bits 16-19: second units
+  mem[GEN_FRAME+16]=(s_u>>0)&1; mem[GEN_FRAME+17]=(s_u>>1)&1;
+  mem[GEN_FRAME+18]=(s_u>>2)&1; mem[GEN_FRAME+19]=(s_u>>3)&1;
+  // Bits 20-23: user bits 3 — zero
+  // Bits 24-26: second tens
+  mem[GEN_FRAME+24]=(s_t>>0)&1; mem[GEN_FRAME+25]=(s_t>>1)&1;
+  mem[GEN_FRAME+26]=(s_t>>2)&1;
+  // Bit 27: biphase mark correction — computed below
+  // Bits 28-31: user bits 4 — zero
+  // Bits 32-35: minute units
+  mem[GEN_FRAME+32]=(m_u>>0)&1; mem[GEN_FRAME+33]=(m_u>>1)&1;
+  mem[GEN_FRAME+34]=(m_u>>2)&1; mem[GEN_FRAME+35]=(m_u>>3)&1;
+  // Bits 36-39: user bits 5 — zero
+  // Bits 40-42: minute tens
+  mem[GEN_FRAME+40]=(m_t>>0)&1; mem[GEN_FRAME+41]=(m_t>>1)&1;
+  mem[GEN_FRAME+42]=(m_t>>2)&1;
+  // Bit 43: binary group flag — zero; bits 44-47: user bits 6 — zero
+  // Bits 48-51: hour units
+  mem[GEN_FRAME+48]=(h_u>>0)&1; mem[GEN_FRAME+49]=(h_u>>1)&1;
+  mem[GEN_FRAME+50]=(h_u>>2)&1; mem[GEN_FRAME+51]=(h_u>>3)&1;
+  // Bits 52-55: user bits 7 — zero
+  // Bits 56-57: hour tens
+  mem[GEN_FRAME+56]=(h_t>>0)&1; mem[GEN_FRAME+57]=(h_t>>1)&1;
+  // Bits 58-59: binary group flags — zero; bits 60-63: user bits 8 — zero
+  // Bits 64-79: sync word 0x3FFD stored LSB-first
+  sw = 0x3FFD; i = 0;
+  loop(16, mem[GEN_FRAME+64+i] = (sw>>i)&1; i += 1;);
+
+  // Biphase mark correction (bit 27): set so total '1' count is even,
+  // which makes total transitions per frame (80 + ones) even.
+  ones = 0; i = 0;
+  loop(27, ones += mem[GEN_FRAME+i]; i += 1;);
+  i = 28; loop(52, ones += mem[GEN_FRAME+i]; i += 1;);
+  mem[GEN_FRAME+27] = ones & 1;
+);
+
+// ── Decoder helpers ───────────────────────────────────────────────────────
+function extract_bits(start, off, cnt) local(r, i) (
   r = 0; i = 0;
   loop(cnt,
     r |= mem[BIT_BUF + ((start + off + i) & 511)] << i;
@@ -74,53 +187,29 @@ function extract_bits(start off cnt) local(r i) (
   r
 );
 
-// Check last 16 bits for LTC sync word and if found decode the 80-bit frame.
-function check_sync() local(i bv wl wm fs f_u f_t s_u s_t m_u m_t h_u h_t fr sr mr hr) (
+function check_sync() local(wl, wm, i, bv, fs,
+                             f_u,f_t,s_u,s_t,m_u,m_t,h_u,h_t,
+                             fr, sr, mr, hr) (
   wl = 0; wm = 0; i = 0;
   loop(16,
-    bv = mem[BIT_BUF + ((bit_idx - 16 + i) & 511)];
+    bv  = mem[BIT_BUF + ((bit_idx - 16 + i) & 511)];
     wl |= bv << i;
     wm |= bv << (15 - i);
     i  += 1;
   );
-
   (wl == 0x3FFD || wl == 0xBFFC || wm == 0x3FFD || wm == 0xBFFC) ? (
-    fs   = bit_idx - 80;   // absolute start of 80-bit frame
-
-    f_u  = extract_bits(fs,  0, 4);   // frame units
-    f_t  = extract_bits(fs,  8, 2);   // frame tens
-    s_u  = extract_bits(fs, 16, 4);   // second units
-    s_t  = extract_bits(fs, 24, 3);   // second tens
-    m_u  = extract_bits(fs, 32, 4);   // minute units
-    m_t  = extract_bits(fs, 40, 3);   // minute tens
-    h_u  = extract_bits(fs, 48, 4);   // hour units
-    h_t  = extract_bits(fs, 56, 2);   // hour tens
-
-    fr   = f_t * 10 + f_u;
-    sr   = s_t * 10 + s_u;
-    mr   = m_t * 10 + m_u;
-    hr   = h_t * 10 + h_u;
-
-    // Sanity-check decoded values before accepting
+    fs  = bit_idx - 80;
+    f_u = extract_bits(fs,  0, 4); f_t = extract_bits(fs,  8, 2);
+    s_u = extract_bits(fs, 16, 4); s_t = extract_bits(fs, 24, 3);
+    m_u = extract_bits(fs, 32, 4); m_t = extract_bits(fs, 40, 3);
+    h_u = extract_bits(fs, 48, 4); h_t = extract_bits(fs, 56, 2);
+    fr = f_t*10 + f_u; sr = s_t*10 + s_u;
+    mr = m_t*10 + m_u; hr = h_t*10 + h_u;
     fr < fps_int && sr < 60 && mr < 60 && hr < 24 ? (
-      slider1 = hr;
-      slider2 = mr;
-      slider3 = sr;
-      slider4 = fr;
-      slider5 = 1;
-      seq     = (seq + 1) & 65535;
-      slider6 = seq;
+      dec_h = hr; dec_m = mr; dec_s = sr; dec_f = fr;
+      dec_valid = 1;
+      dec_seq = (dec_seq + 1) & 65535;
       valid_samples = floor(srate * 0.5);
-      sliderchange(63);  // notify host: sliders 1-6 updated
-
-      // Write to shared gmem for other JSFX consumers
-      gmem[0] = 1;
-      gmem[1] = hr;
-      gmem[2] = mr;
-      gmem[3] = sr;
-      gmem[4] = fr;
-      gmem[5] = seq;
-      gmem[6] = floor(slider7);
     );
   );
 );
@@ -131,72 +220,208 @@ function push_bit(b) (
   bit_idx >= 80 ? check_sync();
 );
 
-update_thresholds();
+// ── Initialise ────────────────────────────────────────────────────────────
+update_params();
+build_enc_frame();
 
 
 @slider
 
-update_thresholds();
+update_params();
+build_enc_frame();
 
 
 @block
 
-// Peak level decay: ~10 dB/s
-peak_level *= exp(log(0.316) * samplesblock / srate);
-slider9    = peak_level;
+src_mode = floor(slider10);
 
-// Expire lock if no valid frame received recently
+// ── Determine TC for encoder ──────────────────────────────────────────────
+src_mode == 0 ? (
+  // Transport mode: derive TC from REAPER play position
+  fps_type == 2 ? tc_from_pos_df(transport_pos) : tc_from_pos_ndf(transport_pos);
+  dec_valid = 1;
+) : (
+  // LTC input mode: mirror last decoded TC (if valid)
+  dec_valid ? (enc_h=dec_h; enc_m=dec_m; enc_s=dec_s; enc_f=dec_f;);
+);
+
+play_state = transport_playing ? 1 : 0;
+
+// ── Write gmem (CLAUDE.md protocol) ──────────────────────────────────────
+gmem[TC_HOUR]          = enc_h;
+gmem[TC_MIN]           = enc_m;
+gmem[TC_SEC]           = enc_s;
+gmem[TC_FRAME]         = enc_f;
+gmem[TC_FRAMERATE]     = fps_type;
+gmem[TC_PLAY_STATE]    = play_state;
+gmem[TC_VALID]         = dec_valid;
+gmem[TC_WRITE_COUNTER] = (gmem[TC_WRITE_COUNTER] + 1) & 65535;
+
+// ── Mirror to sliders for Lua TrackFX_GetParam readback ──────────────────
+// Sliders 1-6: TC fields + lock + seq; slider9: peak
+// Mask bits: slider1=bit0 .. slider6=bit5, slider9=bit8 → 0x13F
+slider1=enc_h; slider2=enc_m; slider3=enc_s; slider4=enc_f;
+slider5=dec_valid; slider6=dec_seq; slider9=peak_level;
+sliderchange(0x13F);
+
+// ── Peak decay (~10 dB/s) ─────────────────────────────────────────────────
+peak_level *= exp(log(0.316) * samplesblock / srate);
+
+// ── LTC lock expiry ───────────────────────────────────────────────────────
 valid_samples > 0 ? (
   valid_samples -= samplesblock;
-  valid_samples <= 0 ? (
-    valid_samples = 0;
-    slider5       = 0;
-    gmem[0]       = 0;
-    sliderchange(16);  // slider5 = bit 4
-  );
+  valid_samples <= 0 ? (valid_samples = 0; dec_valid = 0;);
 );
 
 
 @sample
 
-// Mix stereo to mono
-s     = (spl0 + spl1) * 0.5;
-abs_s = abs(s);
-abs_s > peak_level ? (peak_level = abs_s);
+// ── LTC Decoder (active in LTC input mode only) ───────────────────────────
+src_mode == 1 ? (
+  s     = (spl0 + spl1) * 0.5;
+  abs_s = abs(s);
+  abs_s > peak_level ? (peak_level = abs_s);
 
-// Determine new polarity state (with deadband)
-ns = s > thr ? 1 : s < -thr ? -1 : 0;
-
-ns != 0 && ns != sig_state ? (
-  sig_state = ns;
-  gap = stt;
-  stt = 0;
-
-  gap < minb ? (
-    // Too short — noise, reset
-    bpm_state = 0;
-  ) : gap < mid ? (
-    // Short gap — mid-bit transition of a '1'
-    bpm_state == 0 ? (
-      bpm_state = 1;
+  ns = s > thr ? 1 : s < -thr ? -1 : 0;
+  ns != 0 && ns != sig_state ? (
+    sig_state = ns;
+    gap = stt; stt = 0;
+    gap < minb ? (
+      bpm_state = 0;
+    ) : gap < mid ? (
+      bpm_state == 0 ? bpm_state = 1 : (push_bit(1); bpm_state = 0;);
+    ) : gap < maxb ? (
+      bpm_state == 0 ? push_bit(0) : (push_bit(1); bpm_state = 0;);
     ) : (
-      push_bit(1);
       bpm_state = 0;
     );
-  ) : gap < maxb ? (
-    // Long gap — bit boundary
-    bpm_state == 0 ? (
-      push_bit(0);
-    ) : (
-      push_bit(1);
-      bpm_state = 0;
-    );
-  ) : (
-    // Too long — framing lost
-    bpm_state = 0;
-  );
-) : (
-  stt += 1;
+  ) : (stt += 1;);
 );
 
-// Audio passes through unchanged
+// ── LTC Encoder (biphase mark coding) ────────────────────────────────────
+// Each bit occupies two half-bits.  Always transition at the bit boundary
+// (start of first half); add a mid-bit transition only for '1' bits.
+gen_phase += gen_phase_inc;
+gen_phase >= 1.0 ? (
+  gen_phase -= 1.0;
+  gen_half == 0 ? (
+    // End of first half → second half: mid-bit transition for '1' bits only
+    gen_half = 1;
+    mem[GEN_FRAME + gen_bit_pos] ? (gen_out = -gen_out;);
+  ) : (
+    // End of second half → next bit boundary: always transition
+    gen_half = 0;
+    gen_out  = -gen_out;
+    gen_bit_pos = (gen_bit_pos + 1) % 80;
+    // At frame start, rebuild frame from current enc_* (set in @block)
+    gen_bit_pos == 0 ? build_enc_frame();
+  );
+);
+
+// Output: overwrite track audio with LTC signal
+spl0 = gen_out * enc_amp;
+spl1 = gen_out * enc_amp;
+
+
+@gfx 600 220
+
+// ── Background ────────────────────────────────────────────────────────────
+gfx_r=0.11; gfx_g=0.11; gfx_b=0.13; gfx_a=1;
+gfx_rect(0, 0, gfx_w, gfx_h, 1);
+
+// ── Script-alive indicator ────────────────────────────────────────────────
+// Detect changes in gmem[SCRIPT_ALIVE]; reset a decay counter each time.
+gmem[SCRIPT_ALIVE] != gfx_prev_alive ? (
+  gfx_prev_alive    = gmem[SCRIPT_ALIVE];
+  gfx_alive_timeout = 90;  // ~3 s at 30 fps gfx rate
+);
+gfx_alive_timeout > 0 ? (gfx_alive_timeout -= 1;);
+script_running = gfx_alive_timeout > 0;
+
+gfx_setfont(1, "Arial", 12, 0);
+script_running ? (
+  gfx_r=0.2; gfx_g=0.85; gfx_b=0.35;
+  sprintf(#alive_str, "● SCRIPT RUNNING");
+) : (
+  gfx_r=0.5; gfx_g=0.5; gfx_b=0.55;
+  sprintf(#alive_str, "○ SCRIPT NOT FOUND");
+);
+gfx_a=1;
+gfx_measurestr(#alive_str, aw, ah);
+gfx_x = gfx_w - aw - 8; gfx_y = 8;
+gfx_drawstr(#alive_str);
+
+// ── Large TC display ──────────────────────────────────────────────────────
+sprintf(#tc_str, "%02d:%02d:%02d:%02d",
+  gmem[TC_HOUR], gmem[TC_MIN], gmem[TC_SEC], gmem[TC_FRAME]);
+
+// Colour: orange = LTC mode, no lock; green = valid/running; dim = idle
+gfx_src  = floor(slider10);
+gfx_vld  = gmem[TC_VALID];
+gfx_src == 1 && !gfx_vld ? (
+  gfx_r=0.95; gfx_g=0.65; gfx_b=0.15;   // orange: searching
+) : gfx_vld ? (
+  gfx_r=0.20; gfx_g=0.85; gfx_b=0.35;   // green: locked / running
+) : (
+  gfx_r=0.50; gfx_g=0.50; gfx_b=0.55;   // dim: stopped, no TC
+);
+gfx_a=1;
+gfx_setfont(1, "Courier New", 72, 'b');
+gfx_measurestr(#tc_str, tw, th);
+gfx_x = (gfx_w - tw) / 2;
+gfx_y = 20;
+gfx_drawstr(#tc_str);
+
+// ── Source / framerate status line ────────────────────────────────────────
+gfx_setfont(1, "Arial", 14, 0);
+fps_type == 0 ? strcpy(#fps_str, "24fps") :
+fps_type == 1 ? strcpy(#fps_str, "25fps") :
+fps_type == 2 ? strcpy(#fps_str, "29.97DF") :
+                strcpy(#fps_str, "30fps");
+
+gfx_src == 0 ? (
+  sprintf(#status_str, "TRANSPORT   %s", #fps_str);
+) : gfx_vld ? (
+  sprintf(#status_str, "LTC LOCKED   %s", #fps_str);
+) : (
+  sprintf(#status_str, "SEARCHING   %s", #fps_str);
+);
+
+gfx_r=0.5; gfx_g=0.5; gfx_b=0.55; gfx_a=1;
+gfx_measurestr(#status_str, sw, sh);
+gfx_x = (gfx_w - sw) / 2;
+gfx_y = 20 + th + 6;
+gfx_drawstr(#status_str);
+
+// ── Signal meter (shown in LTC input mode) ────────────────────────────────
+gfx_src == 1 ? (
+  meter_x = 20; meter_y = gfx_h - 46;
+  meter_w = gfx_w - 40; meter_h = 14;
+  meter_floor_db = -48;
+
+  // Track background
+  gfx_r=0.17; gfx_g=0.17; gfx_b=0.21; gfx_a=1;
+  gfx_rect(meter_x, meter_y, meter_w, meter_h, 1);
+
+  // Signal bar (dB-mapped)
+  peak_db   = peak_level > 0.0001 ? 20*log10(peak_level) : -96;
+  peak_norm = max(0, min(1, (peak_db - meter_floor_db) / (-meter_floor_db)));
+  bar_w     = floor(peak_norm * meter_w);
+  bar_w > 0 ? (
+    gfx_r=0.35; gfx_g=0.65; gfx_b=0.95; gfx_a=1;
+    gfx_rect(meter_x, meter_y, bar_w, meter_h, 1);
+  );
+
+  // Threshold marker
+  thr_norm = max(0, min(1, (slider8 - meter_floor_db) / (-meter_floor_db)));
+  thr_x    = meter_x + floor(thr_norm * meter_w);
+  gfx_r=0.95; gfx_g=0.65; gfx_b=0.15; gfx_a=1;
+  gfx_rect(thr_x - 1, meter_y, 2, meter_h, 1);
+
+  // Label
+  gfx_setfont(1, "Arial", 11, 0);
+  gfx_r=0.5; gfx_g=0.5; gfx_b=0.55; gfx_a=1;
+  sprintf(#meter_label, "Signal   Thr: %d dB", floor(slider8));
+  gfx_x = meter_x; gfx_y = meter_y + meter_h + 4;
+  gfx_drawstr(#meter_label);
+);
