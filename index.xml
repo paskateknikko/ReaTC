@@ -2,16 +2,20 @@
 <index version="1" name="ReaTC">
   <category name="Timecode">
     <reapack name="ReaTC.lua" type="script" desc="Art-Net and MIDI Timecode sender for REAPER">
-      <metadata>
-        <description>Send Art-Net TimeCode and MIDI Timecode from REAPER to lighting consoles. Supports real-time TC transmission from REAPER transport or LTC audio input decoding.</description>
+            <metadata>
+                <description><![CDATA[{\rtf1\ansi\deff0
+{\fonttbl{\f0 Helvetica;}}
+\f0\fs22\b ReaTC\b0\par
+Art-Net and MIDI Timecode sender for REAPER.\par
+Supports transport timecode or LTC audio input.\par
+}]]></description>
         <link rel="website">https://github.com/paskateknikko/ReaTC</link>
         <link rel="donation">https://github.com/paskateknikko/ReaTC</link>
       </metadata>
-      <version name="0.0.4" author="Tuukka Aimasmäki" time="2026-02-22T15:09:05Z">
-        <changelog><![CDATA[### Changed
+      <version name="0.0.5" author="Tuukka Aimasmäki" time="2026-02-22T15:12:09Z">
+        <changelog><![CDATA[### Added
 
-- ReaPack URLs now use the github.com/.../raw/... format
-- ReaPack index generation uses changelog entries for release notes]]></changelog>
+- ReaPack About text via RTF description]]></changelog>
         <source main="main" file="Scripts/ReaTC/ReaTC.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/ReaTC.lua</source>
         <source file="Scripts/ReaTC/reatc_core.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_core.lua</source>
         <source file="Scripts/ReaTC/reatc_ltc.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_ltc.lua</source>
