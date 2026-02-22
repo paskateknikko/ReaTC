@@ -1,4 +1,6 @@
 -- ReaTC core: constants, state, config, and timecode helpers
+-- @noindex
+-- @version {{VERSION}}
 
 local M = {}
 

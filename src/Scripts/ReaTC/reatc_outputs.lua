@@ -1,4 +1,6 @@
 -- ReaTC outputs: MTC daemon and Art-Net sender
+-- @noindex
+-- @version {{VERSION}}
 
 return function(core)
   local M = {}

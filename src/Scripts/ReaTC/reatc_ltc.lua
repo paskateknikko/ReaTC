@@ -4,6 +4,8 @@
 -- The JSFX decodes LTC audio in real-time and writes results to
 -- gmem["ReaTC_LTC"] and to its output sliders.
 -- This module reads those sliders via TrackFX_GetParam.
+-- @noindex
+-- @version {{VERSION}}
 
 return function(core)
   local M = {}

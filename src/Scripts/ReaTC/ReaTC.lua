@@ -1,6 +1,17 @@
 -- @description Art-Net and MIDI Timecode sender for REAPER
 -- @author Tuukka Aimasmäki
 -- @version {{VERSION}}
+-- @link https://github.com/paskateknikko/ReaTC
+-- @link reapack https://github.com/ReaTeam/Extensions/raw/master/index.xml ReaImGui
+-- @provides
+--   [main] ReaTC.lua
+--   ReaTC/reatc_core.lua
+--   ReaTC/reatc_ltc.lua
+--   ReaTC/reatc_outputs.lua
+--   ReaTC/reatc_ui.lua
+--   ReaTC/reatc_udp.py
+--   ReaTC/reatc_mtc.py
+--   [effect] ../Effects/ReaTC/reatc_ltc.jsfx
 -- @about
 --   # ReaTC
 --
@@ -16,9 +27,9 @@
 --
 --   ## Requirements
 --   - REAPER 6.0+
---   - ReaImGui (install from ReaPack → ReaTeam Extensions → ReaImGui)
+--   - **ReaImGui** (installed automatically via ReaPack dependency)
 --   - Python 3 (pre-installed on macOS; Windows Store / python.org on Windows)
---   - python-rtmidi (auto-installed on first MTC enable)
+--   - `python-rtmidi` (optional, for MTC — auto-installed on first use)
 --
 --   ## Links
 --   - [GitHub](https://github.com/paskateknikko/ReaTC)

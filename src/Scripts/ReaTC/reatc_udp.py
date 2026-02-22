@@ -8,6 +8,8 @@
 # Usage: python3 reatc_udp.py <dest_ip> <hours> <mins> <secs> <frames> <type>
 #
 # Example: python3 reatc_udp.py 192.168.1.100 1 23 45 12 1
+# @noindex
+# @version {{VERSION}}
 
 __version__ = "{{VERSION}}"
 

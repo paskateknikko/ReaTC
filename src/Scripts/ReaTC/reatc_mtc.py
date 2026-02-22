@@ -12,6 +12,8 @@
 # Stdin protocol (one command per line):
 #   play H M S F type   -- start/continue playback at given TC position
 #   stop H M S F type   -- stop playback and send full-frame locate message
+# @noindex
+# @version {{VERSION}}
 #
 #   type: 0=24fps  1=25fps  2=29.97DF  3=30fps
 #

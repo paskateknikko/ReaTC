@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.0.0-pre2] - 2026-02-22
+
+### Added
+
+- ReaPack `@provides` tag: explicit file list ensures proper package installation
+- ReaPack `@link reapack` dependency: ReaImGui auto-installed when ReaTC is installed
+- `@version` tags in all library files for version tracking
+- `@noindex` tags in library files to prevent them appearing as standalone packages
+
+### Changed
+
+- ReaImGui listed as automatic dependency (installed via ReaPack)
+- Updated requirements documentation in @about section
+
 ## [1.0.0-pre1] - 2026-02-22
 
 ### Added
