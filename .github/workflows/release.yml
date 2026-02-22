@@ -19,6 +19,18 @@ jobs:
         with:
           python-version: '3.x'
       
+      - name: Check release version is newer
+        run: |
+          TAG_VERSION="${{ github.ref_name }}"
+          TAG_VERSION="${TAG_VERSION#v}"
+          CURRENT_VERSION="$(cat version.txt)"
+          HIGHER="$(printf '%s\n%s\n' "$CURRENT_VERSION" "$TAG_VERSION" | sort -V | tail -n1)"
+          if [ "$HIGHER" != "$TAG_VERSION" ] || [ "$TAG_VERSION" = "$CURRENT_VERSION" ]; then
+            echo "::error::Tag version $TAG_VERSION is not greater than current version $CURRENT_VERSION"
+            exit 1
+          fi
+          echo "Version check passed: $CURRENT_VERSION → $TAG_VERSION"
+
       - name: Set version from tag
         run: |
           VERSION="${{ github.ref_name }}"
