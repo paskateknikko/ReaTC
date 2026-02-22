@@ -1,174 +1,118 @@
--- ReaTC LTC decoder
+-- ReaTC LTC decoder — JSFX bridge
+--
+-- Manages the reatc_ltc.jsfx plugin on the selected LTC track.
+-- The JSFX decodes LTC audio in real-time and writes results to
+-- gmem["ReaTC_LTC"] and to its output sliders.
+-- This module reads those sliders via TrackFX_GetParam.
 
 return function(core)
   local M = {}
   local s = core.state
 
-  local _sbuf      = nil   -- reaper.array, allocated once
-  local _sbuf_size = 0
+  -- JSFX identifier (path relative to REAPER Effects directory, no extension)
+  local JSFX_NAME = "JS: ReaTC/reatc_ltc"
 
-  local function push_bit(b)
-    s.bit_idx = s.bit_idx + 1
-    s.bit_buf[((s.bit_idx - 1) & 511) + 1] = b
+  -- Slider parameter indices (0-based, matching the .jsfx slider definitions)
+  local SL_HOURS   = 0   -- slider1  output
+  local SL_MINUTES = 1   -- slider2  output
+  local SL_SECONDS = 2   -- slider3  output
+  local SL_FRAMES  = 3   -- slider4  output
+  local SL_LOCKED  = 4   -- slider5  output
+  local SL_SEQ     = 5   -- slider6  output
+  local SL_FPS     = 6   -- slider7  input (Lua writes framerate type)
+  local SL_THRESH  = 7   -- slider8  input (Lua writes threshold dB)
+  local SL_PEAK    = 8   -- slider9  output
 
-    if b == 1 then
-      s.bit_ones = s.bit_ones + 1
-    else
-      s.bit_zeros = s.bit_zeros + 1
-    end
+  -- Track last-written config to avoid triggering @slider unnecessarily
+  local _last_fps    = nil
+  local _last_thresh = nil
 
-    if s.bit_idx < 80 then return end
-
-    local word_lsb = 0
-    local word_msb = 0
-    for i = 0, 15 do
-      local idx = (((s.bit_idx - 16 + i) & 511) + 1)
-      local bit_val = s.bit_buf[idx]
-      word_lsb = word_lsb | (bit_val << i)
-      word_msb = word_msb | (bit_val << (15 - i))
-    end
-
-    local found_sync = false
-    if word_lsb == 0x3FFD or word_lsb == 0xBFFC then
-      found_sync = true
-      s.last_sync_word = word_lsb
-    elseif word_msb == 0x3FFD or word_msb == 0xBFFC then
-      found_sync = true
-      s.last_sync_word = word_msb
-    end
-
-    if found_sync then
-      s.sync_count = s.sync_count + 1
-      local start = s.bit_idx - 80
-
-      local function eb(offset, count)
-        local r = 0
-        for i = 0, count - 1 do
-          local idx = (((start + offset + i) & 511) + 1)
-          r = r | (s.bit_buf[idx] << i)
-        end
-        return r
-      end
-
-      local f_u = eb(0, 4);  local f_t = eb(8, 2)
-      local s_u = eb(16, 4); local s_t = eb(24, 3)
-      local m_u = eb(32, 4); local m_t = eb(40, 3)
-      local h_u = eb(48, 4); local h_t = eb(56, 2)
-
-      local fr = f_t * 10 + f_u
-      local sr = s_t * 10 + s_u
-      local mr = m_t * 10 + m_u
-      local hr = h_t * 10 + h_u
-
-      local fps_int = core.FPS_INT[s.framerate_type + 1]
-      if fr < fps_int and sr < 60 and mr < 60 and hr < 24 then
-        s.tc_h, s.tc_m, s.tc_s, s.tc_f = hr, mr, sr, fr
-        s.tc_type  = s.framerate_type
-        s.tc_valid = true
-        s.last_valid_time = reaper.time_precise()
+  local function find_jsfx(track)
+    local n = reaper.TrackFX_GetCount(track)
+    for i = 0, n - 1 do
+      local _, name = reaper.TrackFX_GetFXName(track, i, "")
+      if name and name:find("ReaTC LTC Decoder", 1, true) then
+        return i
       end
     end
+    return nil
   end
 
-  function M.decode_ltc_chunk()
+  local function ensure_jsfx(track)
+    local fx = find_jsfx(track)
+    if fx then return fx end
+    local idx = reaper.TrackFX_AddByName(track, JSFX_NAME, false, -1)
+    return idx >= 0 and idx or nil
+  end
+
+  -- Called once per Lua frame when LTC is enabled and a track is selected.
+  function M.update_jsfx()
     local track = s.ltc_track
     if not track then return end
 
-    if not s.accessor then
-      s.accessor     = reaper.CreateTrackAudioAccessor(track)
-      s.last_read_pos = math.max(0, reaper.GetPlayPosition() - 0.1)
+    -- Lazily find or insert the JSFX
+    if not s.ltc_fx_idx then
+      s.ltc_fx_idx = ensure_jsfx(track)
+      _last_fps    = nil   -- force param push after insertion
+      _last_thresh = nil
     end
 
-    local cur_pos = reaper.GetPlayPosition()
-    local window  = cur_pos - s.last_read_pos
+    local fx = s.ltc_fx_idx
+    if not fx then return end
 
-    if window < -0.5 then
-      s.last_read_pos = cur_pos - 0.05
-      s.tc_valid = false
+    -- Push configuration to JSFX only when it changes
+    -- (avoids triggering @slider on every frame)
+    if s.framerate_type ~= _last_fps or s.threshold_db ~= _last_thresh then
+      reaper.TrackFX_SetParam(track, fx, SL_FPS,    s.framerate_type)
+      reaper.TrackFX_SetParam(track, fx, SL_THRESH, s.threshold_db)
+      _last_fps    = s.framerate_type
+      _last_thresh = s.threshold_db
+    end
+
+    -- Read peak level for UI display
+    local peak = reaper.TrackFX_GetParam(track, fx, SL_PEAK)
+    s.peak_level = peak or 0
+
+    -- Read locked state
+    local locked = reaper.TrackFX_GetParam(track, fx, SL_LOCKED)
+    if not locked or locked < 0.5 then
+      -- JSFX reports no lock; expire after 0.5 s of silence
+      if s.tc_valid and reaper.time_precise() - s.last_valid_time > 0.5 then
+        s.tc_valid = false
+      end
       return
     end
-    if window < 0.005 then return end
 
-    local nsamples = math.min(math.floor(window * core.DECODER_SRATE), 4096)
-    if nsamples < 1 then return end
-
-    if _sbuf_size < nsamples then
-      _sbuf      = reaper.new_array(nsamples)
-      _sbuf_size = nsamples
-    end
-
-    reaper.GetAudioAccessorSamples(s.accessor, core.DECODER_SRATE, 1,
-                                    s.last_read_pos, nsamples, _sbuf)
-    s.last_read_pos = s.last_read_pos + nsamples / core.DECODER_SRATE
-
-    local fps = core.FPS_INT[s.framerate_type + 1]
-    local spb  = core.DECODER_SRATE / (fps * 80)
-    local thr  = 10 ^ (s.threshold_db / 20)
-    local mid  = spb * 0.75
-    local minb = spb * 0.25
-    local maxb = spb * 1.5
-
-    local sig_state          = s.sig_state
-    local bpm_state          = s.bpm_state
-    local samples_since_trans = s.samples_since_trans
-    local last_gap           = s.last_gap
-
-    for i = 1, nsamples do
-      local spl = _sbuf[i]
-      samples_since_trans = samples_since_trans + 1
-
-      local abs_spl = math.abs(spl)
-      if abs_spl > s.peak_level then
-        s.peak_level = abs_spl
-      end
-
-      local ns = 0
-      if spl > thr then ns = 1 elseif spl < -thr then ns = -1 end
-
-      if ns ~= 0 and ns ~= sig_state then
-        sig_state = ns
-        s.trans_count = s.trans_count + 1
-        local gap = samples_since_trans
-        samples_since_trans = 0
-
-        if gap < minb then
-          bpm_state = 0
-        elseif gap < mid then
-          last_gap = gap
-          if bpm_state == 0 then
-            bpm_state = 1
-          else
-            push_bit(1)
-            bpm_state = 0
-          end
-        elseif gap < maxb then
-          last_gap = gap
-          if bpm_state == 0 then
-            push_bit(0)
-          else
-            push_bit(1)
-            bpm_state = 0
-          end
-        else
-          bpm_state = 0
-        end
-      end
-    end
-
-    s.sig_state           = sig_state
-    s.bpm_state           = bpm_state
-    s.samples_since_trans = samples_since_trans
-    s.last_gap            = last_gap
-
-    s.peak_level = s.peak_level * 0.95
-  end
-
-  function M.destroy_accessor()
-    if s.accessor then
-      reaper.DestroyAudioAccessor(s.accessor)
-      s.accessor = nil
+    -- Read sequence counter to detect new decoded frames
+    local seq = reaper.TrackFX_GetParam(track, fx, SL_SEQ)
+    if seq and seq ~= s.ltc_seq then
+      s.ltc_seq = seq
+      local h   = reaper.TrackFX_GetParam(track, fx, SL_HOURS)
+      local m   = reaper.TrackFX_GetParam(track, fx, SL_MINUTES)
+      local sec = reaper.TrackFX_GetParam(track, fx, SL_SECONDS)
+      local f   = reaper.TrackFX_GetParam(track, fx, SL_FRAMES)
+      s.tc_h, s.tc_m, s.tc_s, s.tc_f =
+        math.floor(h), math.floor(m), math.floor(sec), math.floor(f)
+      s.tc_type       = s.framerate_type
+      s.tc_valid      = true
+      s.last_valid_time = reaper.time_precise()
+    elseif s.tc_valid and reaper.time_precise() - s.last_valid_time > 0.5 then
+      s.tc_valid = false
     end
   end
+
+  -- Called when the selected LTC track changes so we re-discover the JSFX.
+  function M.on_track_changed()
+    s.ltc_fx_idx = nil
+    s.ltc_seq    = -1
+    s.tc_valid   = false
+    s.peak_level = 0
+    _last_fps    = nil
+    _last_thresh = nil
+  end
+
+  -- Legacy no-op kept so call sites in ReaTC.lua/reatc_ui.lua don't break.
+  function M.destroy_accessor() end
 
   return M
 end

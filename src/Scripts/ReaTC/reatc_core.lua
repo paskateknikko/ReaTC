@@ -74,43 +74,22 @@ M.state = {
   last_win_w     = M.MIN_WIN_W,
   last_win_h     = M.MIN_WIN_H,
 
-  -- Audio accessor
-  accessor       = nil,
-  last_read_pos  = 0,
-
-  -- Signal level monitoring
+  -- Signal level monitoring (populated from JSFX slider9)
   peak_level     = 0,
-  trans_count    = 0,  -- count of transitions detected
 
-  -- Biphase mark decoder state (ported from LTC_Decoder.jsfx @sample)
-  sig_state          = 0,   -- 0=deadband, 1=positive, -1=negative
-  bpm_state          = 0,   -- 0=at boundary, 1=mid-bit of a '1' seen
-  samples_since_trans = 0,
-  bit_buf            = {},  -- circular buffer [1..512]
-  bit_idx            = 0,   -- total bits pushed (use & 511 for index)
-  last_gap           = 0,
+  -- JSFX bridge state
+  ltc_fx_idx     = nil,      -- FX chain index of reatc_ltc.jsfx on the LTC track
+  ltc_seq        = -1,       -- last seen sequence counter from JSFX
 
   -- Decoded LTC timecode
   tc_h = 0, tc_m = 0, tc_s = 0, tc_f = 0, tc_type = M.FR_EBU,
   tc_valid          = false,
   last_valid_time   = 0,
-  sync_count        = 0,
-  last_sync_word    = 0,  -- for debugging
-  bit_ones          = 0,  -- count of '1' bits for debugging
-  bit_zeros         = 0,  -- count of '0' bits for debugging
 
   -- Transport timecode (used when LTC not active)
   tr_h = 0, tr_m = 0, tr_s = 0, tr_f = 0,
-
-  -- Playback tracking (for accessor lifecycle)
-  was_playing = false,
 }
 
--- Initialise bit buffer
-for i = 1, 512 do M.state.bit_buf[i] = 0 end
-
--- Sample rate we request from the audio accessor
-M.DECODER_SRATE = 44100
 
 -- Python detection
 function M.find_python()
