@@ -15,6 +15,7 @@
 -- @about
 --   # ReaTC
 --
+--   TESTITESTITESTI
 --   Sends **Art-Net TimeCode** and **MIDI Timecode** from REAPER.
 --   Decodes incoming LTC audio via a bundled JSFX plugin.
 --
