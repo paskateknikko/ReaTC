@@ -7,7 +7,7 @@
         <link rel="website">https://github.com/paskateknikko/ReaTC</link>
         <link rel="donation">https://github.com/paskateknikko/ReaTC</link>
       </metadata>
-      <version name="0.0.4" author="Tuukka Aimasmäki" time="2026-02-22T15:04:05Z">
+      <version name="0.0.4" author="Tuukka Aimasmäki" time="2026-02-22T15:09:05Z">
         <changelog><![CDATA[### Changed
 
 - ReaPack URLs now use the github.com/.../raw/... format

@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -46,6 +48,20 @@ jobs:
         run: |
           VERSION="${{ github.ref_name }}"
           echo "version=${VERSION#v}" >> $GITHUB_OUTPUT
+
+      - name: Update index.xml on main
+        run: |
+          cp index.xml /tmp/index.xml
+          cp version.txt /tmp/version.txt
+          git fetch origin main
+          git checkout main
+          cp /tmp/index.xml index.xml
+          cp /tmp/version.txt version.txt
+          git add index.xml version.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update index.xml for v${{ steps.version.outputs.version }}" || echo "No index changes to commit"
+          git push origin main
       
       - name: Generate release notes from CHANGELOG
         id: changelog

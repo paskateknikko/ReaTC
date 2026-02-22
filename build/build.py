@@ -135,13 +135,14 @@ def generate_index_xml(version):
     timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     
     changelog = read_changelog(version)
+    about_rtf = "{\\rtf1\\ansi\\deff0\n{\\fonttbl{\\f0 Helvetica;}}\n\\f0\\fs22\\b ReaTC\\b0\\par\nArt-Net and MIDI Timecode sender for REAPER.\\par\nSupports transport timecode or LTC audio input.\\par\n}"
     
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <index version="1" name="ReaTC">
   <category name="Timecode">
     <reapack name="ReaTC.lua" type="script" desc="Art-Net and MIDI Timecode sender for REAPER">
-      <metadata>
-        <description>Send Art-Net TimeCode and MIDI Timecode from REAPER to lighting consoles. Supports real-time TC transmission from REAPER transport or LTC audio input decoding.</description>
+            <metadata>
+                <description><![CDATA[{about_rtf}]]></description>
         <link rel="website">https://github.com/paskateknikko/ReaTC</link>
         <link rel="donation">https://github.com/paskateknikko/ReaTC</link>
       </metadata>
