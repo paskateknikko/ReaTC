@@ -34,8 +34,9 @@ do
   M.script_path = info.source:match("@(.+[\\/])") or ""
 end
 
-M.py_artnet = M.script_path .. "reatc_udp.py"
-M.py_mtc    = M.script_path .. "reatc_mtc.py"
+M.py_artnet  = M.script_path .. "reatc_udp.py"
+M.py_mtc     = M.script_path .. "reatc_mtc.py"
+M.py_ltcout  = M.script_path .. "reatc_ltcout.py"
 
 M.is_win = reaper.GetOS():find("Win") ~= nil
 M.dev_null = M.is_win and "2>NUL" or "2>/dev/null"
@@ -61,6 +62,14 @@ M.state = {
   mtc_error    = nil,
   mtc_ports    = nil,        -- list of {name, index}
   last_mtc_time = 0,
+
+  -- LTC audio output
+  ltc_out_enabled  = false,
+  ltc_out_device   = "",     -- "" = default device
+  ltc_out_proc     = nil,
+  ltc_out_error    = nil,
+  ltc_out_devices  = nil,    -- list of {name, index}
+  last_ltc_out_time = 0,
 
   -- LTC decoder configuration
   ltc_enabled    = false,
@@ -151,6 +160,49 @@ function M.try_install_rtmidi()
   return false
 end
 
+-- sounddevice install helper
+function M.check_sounddevice()
+  if not M.state.python_bin then return false end
+  local q = M.is_win and ('"' .. M.state.python_bin .. '"') or M.state.python_bin
+  local h = io.popen(q .. ' -c "import sounddevice; import numpy; print(1)" 2>&1')
+  if not h then return false end
+  local r = h:read("*l"); h:close()
+  return r == "1"
+end
+
+function M.try_install_sounddevice()
+  local ret = reaper.ShowMessageBox(
+    "sounddevice and numpy are required for LTC audio output.\n\n" ..
+    "Both are free and open-source.\n" ..
+    "Install them now? (requires internet connection)\n\n" ..
+    "Command: pip3 install sounddevice numpy",
+    "Install dependency?", 4)  -- 4 = Yes/No buttons
+  if ret ~= 6 then return false end  -- 6 = Yes
+  local q = M.is_win and ('"' .. M.state.python_bin .. '"') or M.state.python_bin
+  os.execute(q .. ' -m pip install sounddevice numpy')
+  if M.check_sounddevice() then return true end
+  reaper.MB("Installation failed.\nPlease run: pip3 install sounddevice numpy",
+            "Install Failed", 0)
+  return false
+end
+
+-- Audio output device listing
+function M.list_audio_devices()
+  if not M.state.python_bin then return {} end
+  local q   = M.is_win and ('"' .. M.state.python_bin .. '"') or M.state.python_bin
+  local cmd = q .. ' "' .. M.py_ltcout .. '" --list-devices 2>&1'
+  local h   = io.popen(cmd)
+  if not h then return {} end
+  local out = h:read("*a"); h:close()
+  local devices = { { name = "Default Device", index = -1 } }
+  for line in out:gmatch("[^\n]+") do
+    local idx, name = line:match("^(%d+): (.+)")
+    if idx then table.insert(devices, { name = name, index = tonumber(idx) }) end
+  end
+  return devices
+end
+
+
 -- MIDI port listing
 function M.list_midi_ports()
   if not M.state.python_bin then return {} end
@@ -226,6 +278,8 @@ function M.load_settings()
   s.ltc_track_idx  = tonumber(gets("ltc_track_idx"))
   s.threshold_db   = tonumber(gets("threshold_db")) or -24
   s.ltc_fallback   = gets("ltc_fallback") ~= "false"  -- default true
+  s.ltc_out_enabled = gets("ltc_out_enabled") == "true"
+  s.ltc_out_device  = gets("ltc_out_device")  or ""
 end
 
 function M.save_settings()
@@ -240,6 +294,8 @@ function M.save_settings()
   sets("ltc_track_idx",  s.ltc_track_idx or "")
   sets("threshold_db",   s.threshold_db)
   sets("ltc_fallback",   s.ltc_fallback)
+  sets("ltc_out_enabled", s.ltc_out_enabled)
+  sets("ltc_out_device",  s.ltc_out_device)
 end
 
 return M

@@ -83,5 +83,54 @@ return function(core)
     end
   end
 
+  function M.start_ltc_out_daemon()
+    if s.ltc_out_proc then return true end
+    if not s.python_bin then
+      s.ltc_out_error = "Python not found"; return false
+    end
+    local q = core.is_win and ('"' .. s.python_bin .. '"') or s.python_bin
+    local cmd
+    if s.ltc_out_device ~= "" then
+      cmd = q .. ' "' .. core.py_ltcout .. '" "' .. s.ltc_out_device .. '" ' .. core.dev_null
+    else
+      cmd = q .. ' "' .. core.py_ltcout .. '" ' .. core.dev_null
+    end
+    s.ltc_out_proc = io.popen(cmd, "w")
+    if not s.ltc_out_proc then
+      s.ltc_out_error = "Failed to start LTC output daemon"; return false
+    end
+    s.ltc_out_error = nil
+    return true
+  end
+
+  function M.stop_ltc_out_daemon()
+    if s.ltc_out_proc then
+      pcall(function() s.ltc_out_proc:close() end)
+      s.ltc_out_proc = nil
+    end
+  end
+
+  function M.send_ltc_out()
+    if not s.ltc_out_enabled or not s.ltc_out_proc then return end
+    local now = reaper.time_precise()
+    if now - s.last_ltc_out_time < 0.033 then return end
+    s.last_ltc_out_time = now
+
+    local play = (reaper.GetPlayState() & 1) == 1
+    local h, m, sec, f = core.get_active_tc()
+    local t = s.framerate_type
+
+    local ok = pcall(function()
+      s.ltc_out_proc:write(string.format("%s %d %d %d %d %d\n",
+        play and "play" or "stop", h, m, sec, f, t))
+      s.ltc_out_proc:flush()
+    end)
+    if not ok then
+      s.ltc_out_error = "Daemon write failed"
+      M.stop_ltc_out_daemon()
+      s.ltc_out_enabled = false
+    end
+  end
+
   return M
 end

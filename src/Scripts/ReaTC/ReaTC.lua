@@ -53,6 +53,17 @@ local function init()
     end
   end
 
+  if state.ltc_out_enabled then
+    if core.check_sounddevice() then
+      state.ltc_out_devices = core.list_audio_devices()
+      outputs.start_ltc_out_daemon()
+    else
+      state.ltc_out_enabled = false
+      state.ltc_out_error   = "sounddevice/numpy missing — re-enable LTC Out to install"
+      core.save_settings()
+    end
+  end
+
   gfx.init("ReaTC v" .. core.VERSION, core.MIN_WIN_W, core.MIN_WIN_H)
   gfx.setfont(1, "Arial", 13, 0)
 end
@@ -63,6 +74,7 @@ local function loop()
     -- Window closed → clean up
     ltc.destroy_accessor()
     outputs.stop_mtc_daemon()
+    outputs.stop_ltc_out_daemon()
     core.save_settings()
     return  -- do NOT defer again
   end
@@ -99,6 +111,7 @@ local function loop()
 
   outputs.send_artnet()
   outputs.send_mtc()
+  outputs.send_ltc_out()
   ui.draw_ui()
   gfx.update()
 

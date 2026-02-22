@@ -295,12 +295,13 @@ return function(core, outputs, ltc)
       tw, th = gfx.measurestr(tc_str)
     end
 
+    local any_out = s.artnet_enabled or s.mtc_enabled or s.ltc_out_enabled
     local y = (gfx.h - th - 60) / 2
 
     if is_ltc_locked then
       sc(C.green)
     else
-      sc((s.artnet_enabled or s.mtc_enabled) and C.green or C.dim)
+      sc(any_out and C.green or C.dim)
     end
     gfx.x = (gfx.w - tw) / 2
     gfx.y = y
@@ -322,7 +323,7 @@ return function(core, outputs, ltc)
         sc_ = C.orange
       end
     else
-      if s.artnet_enabled or s.mtc_enabled then
+      if any_out then
         sl = string.format("Timeline   %s", core.FR_NAMES[s.framerate_type + 1])
         sc_ = C.green
       else
@@ -332,6 +333,34 @@ return function(core, outputs, ltc)
     end
     local slw = gfx.measurestr(sl)
     put((gfx.w - slw) / 2, y, sl, sc_)
+
+    -- Active output badges
+    gfx.setfont(1, "Arial", 11, 0)
+    local badge_y = gfx.h - 40
+    local badges = {
+      { label = "Art-Net", active = s.artnet_enabled },
+      { label = "MTC",     active = s.mtc_enabled    },
+      { label = "LTC Out", active = s.ltc_out_enabled },
+    }
+    local dot = "● "
+    local gap = 8
+    -- Measure total width to centre the row
+    local total_w = 0
+    for i, b in ipairs(badges) do
+      local dot_w = gfx.measurestr(dot)
+      local lbl_w = gfx.measurestr(b.label)
+      total_w = total_w + dot_w + lbl_w + (i < #badges and gap or 0)
+    end
+    local bx = (gfx.w - total_w) / 2
+    for i, b in ipairs(badges) do
+      local dot_w = gfx.measurestr(dot)
+      sc(b.active and C.green or C.dim)
+      gfx.x = bx; gfx.y = badge_y; gfx.drawstr(dot)
+      bx = bx + dot_w
+      sc(b.active and C.text or C.dim)
+      gfx.x = bx; gfx.y = badge_y; gfx.drawstr(b.label)
+      bx = bx + gfx.measurestr(b.label) + gap
+    end
 
     gfx.setfont(1, "Arial", 13, 0)
     if button(gfx.w - 110, gfx.h - 36, 100, 28, "⚙ Settings") then
@@ -360,7 +389,7 @@ return function(core, outputs, ltc)
     if is_ltc_locked then
       sc(C.green)
     else
-      sc((s.artnet_enabled or s.mtc_enabled) and C.green or C.dim)
+      sc((s.artnet_enabled or s.mtc_enabled or s.ltc_out_enabled) and C.green or C.dim)
     end
     gfx.x = (gfx.w - tw) / 2
     gfx.y = y + 2
@@ -461,6 +490,67 @@ return function(core, outputs, ltc)
       put(x + 2, y, "Active — " .. pl, C.green)
     else
       put(x + 2, y, "Requires python-rtmidi (auto-installed on enable)", C.dim)
+    end
+    y = y + 16
+
+    sec_hdr(x, y, W, "  LTC Audio Output")
+    y = y + 24
+
+    gfx.setfont(1, "Arial", 13, 0)
+    if checkbox(x, y, "Enable LTC Out", s.ltc_out_enabled) then
+      if not s.ltc_out_enabled then
+        if core.check_sounddevice() or core.try_install_sounddevice() then
+          s.ltc_out_enabled = true
+          s.ltc_out_error   = nil
+          if not s.ltc_out_devices then
+            s.ltc_out_devices = core.list_audio_devices()
+          end
+          outputs.start_ltc_out_daemon()
+        end
+      else
+        s.ltc_out_enabled = false
+        outputs.stop_ltc_out_daemon()
+        s.ltc_out_error = nil
+      end
+      core.save_settings()
+    end
+
+    if s.ltc_out_enabled then
+      if ui.dropdown_id == "ltc_out_device" and not s.ltc_out_devices then
+        s.ltc_out_devices = core.list_audio_devices()
+      end
+
+      local devs = s.ltc_out_devices or {}
+      local dev_labels = {}
+      local current_dev_idx = nil
+
+      for i, d in ipairs(devs) do
+        dev_labels[i] = (d.index == -1) and "Default Device" or d.name
+        if (s.ltc_out_device == "" and d.index == -1) or
+           (s.ltc_out_device ~= "" and d.name == s.ltc_out_device) then
+          current_dev_idx = i
+        end
+      end
+
+      put(x, y + 2, "Device:", C.dim)
+      local sel = dropdown("ltc_out_device", x + 60, y - 1, W - 60, 20, dev_labels, current_dev_idx)
+      if sel then
+        local nd = devs[sel]
+        s.ltc_out_device = (nd.index == -1) and "" or nd.name
+        outputs.stop_ltc_out_daemon(); outputs.start_ltc_out_daemon()
+        core.save_settings()
+      end
+    end
+    y = y + 22
+
+    gfx.setfont(1, "Arial", 11, 0)
+    if s.ltc_out_error then
+      put(x + 2, y, "Error: " .. trunc(s.ltc_out_error, 52), C.red)
+    elseif s.ltc_out_enabled then
+      local dl = s.ltc_out_device ~= "" and s.ltc_out_device or "Default Device"
+      put(x + 2, y, "Active — " .. dl, C.green)
+    else
+      put(x + 2, y, "Requires sounddevice + numpy (auto-installed on enable)", C.dim)
     end
     y = y + 16
 
