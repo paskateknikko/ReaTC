@@ -100,12 +100,41 @@ def build():
         print(f"✗ Build failed: {e}", file=sys.stderr)
         return 1
 
+def read_changelog(version):
+    """Extract changelog notes for a specific version from CHANGELOG.md"""
+    changelog_file = REPO_ROOT / "CHANGELOG.md"
+    if not changelog_file.exists():
+        return f"Release {version}. See https://github.com/paskateknikko/ReaTC/releases/tag/v{version} for details."
+    
+    with open(changelog_file, "r") as f:
+        content = f.read()
+    
+    lines = content.splitlines()
+    notes = []
+    in_section = False
+    for line in lines:
+        if re.match(rf"^## \[{re.escape(version)}\]", line):
+            in_section = True
+            continue
+        if in_section:
+            if re.match(r"^## \[", line):
+                break
+            notes.append(line)
+    
+    notes_text = "\n".join(notes).strip()
+    if notes_text:
+        return notes_text
+    return f"Release {version}. See https://github.com/paskateknikko/ReaTC/releases/tag/v{version} for details."
+
+
 def generate_index_xml(version):
     """Generate ReaPack index.xml with all source files and proper metadata"""
     from datetime import datetime
     
     # Generate ISO 8601 timestamp (UTC)
     timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    
+    changelog = read_changelog(version)
     
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <index version="1" name="ReaTC">
@@ -116,8 +145,8 @@ def generate_index_xml(version):
         <link rel="website">https://github.com/paskateknikko/ReaTC</link>
         <link rel="donation">https://github.com/paskateknikko/ReaTC</link>
       </metadata>
-      <version name="{version}" author="Tuukka Aimasmäki" time="{timestamp}">
-        <changelog><![CDATA[Release {version}. See https://github.com/paskateknikko/ReaTC/releases/tag/v{version} for details.]]></changelog>
+          <version name="{version}" author="Tuukka Aimasmäki" time="{timestamp}">
+        <changelog><![CDATA[{changelog}]]></changelog>
         <source file="Scripts/ReaTC/ReaTC.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/ReaTC.lua</source>
         <source file="Scripts/ReaTC/reatc_core.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_core.lua</source>
         <source file="Scripts/ReaTC/reatc_ltc.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_ltc.lua</source>
