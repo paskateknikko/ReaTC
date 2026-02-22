@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-02-22
+
+### Added
+
+- Automated GitHub Releases workflow that builds and packages ReaTC on version tags
+- ReaPack index metadata improvements with correct repository URLs and all script sources
+- Release zip artifact generation for GitHub Releases
+
+### Changed
+
+- Build scripts tracked in git for CI compatibility
+- ReaPack install URL updated to the correct GitHub repository
+
+
 ## [0.0.1] - 2026-02-22
 
 ### Features
