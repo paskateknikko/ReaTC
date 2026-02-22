@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.0.0-pre3] - 2026-02-22
+
+### Changed
+
+- **ReaPack branch renamed**: `gh-pages` → `reapack` for clarity and self-documentation
+- **ReaPack URL updated**: `https://github.com/paskateknikko/ReaTC/raw/reapack/index.xml`
+  - index.xml now only published to reapack branch (not tracked in main)
+  - Fully automated workflow (no manual commits needed)
+  - Single source of truth for distribution
+- Build script generates index.xml only in `dist/` directory
+- Added index.xml to .gitignore
+
+### Migration
+
+If you installed previous versions, update your ReaPack repository URL:
+1. Extensions > ReaPack > Manage repositories
+2. Find ReaTC, click Edit
+3. Update URL to: `https://github.com/paskateknikko/ReaTC/raw/reapack/index.xml`
+
 ## [1.0.0-pre2] - 2026-02-22
 
 ### Added
