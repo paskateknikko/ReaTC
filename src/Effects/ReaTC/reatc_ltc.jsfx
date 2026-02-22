@@ -4,20 +4,20 @@ version:{{VERSION}}
 
 // Dual-mode SMPTE/EBU LTC processor.
 //
-//   Source mode 0 — Transport: generates LTC from REAPER play position.
-//   Source mode 1 — LTC Input: decodes LTC from incoming audio and
+//   Source mode 0 - Transport: generates LTC from REAPER play position.
+//   Source mode 1 - LTC Input: decodes LTC from incoming audio and
 //                               re-clocks / mirrors it on the output.
 //
-// gmem layout — namespace "ReaTC_LTC" (CLAUDE.md protocol):
-//   [0] TC_HOUR          JSFX → Script   hours 0-23
-//   [1] TC_MIN           JSFX → Script   minutes 0-59
-//   [2] TC_SEC           JSFX → Script   seconds 0-59
-//   [3] TC_FRAME         JSFX → Script   frames 0-(fps-1)
-//   [4] TC_FRAMERATE     JSFX → Script   0=24 1=25 2=29.97DF 3=30
-//   [5] TC_PLAY_STATE    JSFX → Script   0=stop 1=play
-//   [6] TC_VALID         JSFX → Script   1=valid 0=invalid/not locked
-//   [7] TC_WRITE_COUNTER JSFX → Script   incremented each @block (staleness)
-//   [8] SCRIPT_ALIVE     Script → JSFX   incremented each Lua defer cycle
+// gmem layout - namespace "ReaTC_LTC" (CLAUDE.md protocol):
+//   [0] TC_HOUR          JSFX -> Script   hours 0-23
+//   [1] TC_MIN           JSFX -> Script   minutes 0-59
+//   [2] TC_SEC           JSFX -> Script   seconds 0-59
+//   [3] TC_FRAME         JSFX -> Script   frames 0-(fps-1)
+//   [4] TC_FRAMERATE     JSFX -> Script   0=24 1=25 2=29.97DF 3=30
+//   [5] TC_PLAY_STATE    JSFX -> Script   0=stop 1=play
+//   [6] TC_VALID         JSFX -> Script   1=valid 0=invalid/not locked
+//   [7] TC_WRITE_COUNTER JSFX -> Script   incremented each @block (staleness)
+//   [8] SCRIPT_ALIVE     Script -> JSFX   incremented each Lua defer cycle
 //
 // Slider layout:
 //   1-4   hours/minutes/seconds/frames  output, Lua reads via TrackFX_GetParam
@@ -39,22 +39,23 @@ slider7:1<0,3,1{24fps (Film),25fps (EBU),29.97 DF,30fps (SMPTE)}>-Framerate
 slider8:-24<-48,-6,1>-Threshold dB
 slider9:0<0,1,0.001>-Peak Level
 slider10:0<0,1,1{Transport,LTC Input}>-Source Mode
-slider11:-20<-40,0,1>-Output Level dBFS
+slider11:-10<-40,0,1>-Output Level dBFS
 
 @init
 
-// ── gmem indices (CLAUDE.md) ──────────────────────────────────────────────
+// gmem indices (CLAUDE.md) --------
 TC_HOUR=0; TC_MIN=1; TC_SEC=2; TC_FRAME=3;
 TC_FRAMERATE=4; TC_PLAY_STATE=5; TC_VALID=6;
 TC_WRITE_COUNTER=7; SCRIPT_ALIVE=8;
 
-gmem_attach("ReaTC_LTC");
+// Use gmem directly (works with all REAPER versions)
+// gmem_attach is optional in REAPER 6.32+; direct access still works
 
-// ── Local memory layout ───────────────────────────────────────────────────
+// Local memory layout --------
 BIT_BUF   = 0;    // decoder ring buffer: 512 cells (indices 0..511)
 GEN_FRAME = 512;  // encoder frame bits: 80 cells (indices 512..591)
 
-// ── Decoder state ─────────────────────────────────────────────────────────
+// Decoder state --------
 sig_state = 0;      // audio polarity: -1 (neg), 0 (deadband), +1 (pos)
 bpm_state = 0;      // biphase-mark state: 0=at boundary, 1=mid-bit '1' seen
 stt       = 0;      // samples since last transition
@@ -66,7 +67,7 @@ peak_level = 0;     // peak input amplitude (linear)
 // Decoded TC (written by decoder, read by @block for LTC mode)
 dec_h=0; dec_m=0; dec_s=0; dec_f=0; dec_valid=0;
 
-// ── Encoder state ─────────────────────────────────────────────────────────
+// Encoder state --------
 // TC to encode (set from transport pos or decoded TC in @block)
 enc_h=0; enc_m=0; enc_s=0; enc_f=0;
 gen_bit_pos = 0;    // current bit in frame (0..79)
@@ -74,11 +75,14 @@ gen_phase   = 0.0;  // fractional phase within current half-bit (0..1)
 gen_half    = 0;    // 0=first half, 1=second half of current bit
 gen_out     = 1.0;  // current output polarity (+1 or -1)
 
-// ── gfx state ─────────────────────────────────────────────────────────────
+// gfx state --------
 gfx_prev_alive    = -1;
 gfx_alive_timeout = 0;
+gfx_alive_last_value = -1;
+muted = 0;
+last_mouse_cap = 0;  // track previous mouse state for debouncing
 
-// ── Compute derived parameters from sliders ───────────────────────────────
+// Compute derived parameters from sliders --------
 function update_params() (
   fps_type = floor(slider7);
   fps_int  = fps_type == 0 ? 24 : fps_type == 1 ? 25 : 30;
@@ -95,7 +99,7 @@ function update_params() (
   enc_amp = 10 ^ (slider11 / 20.0);
 );
 
-// ── Non-drop-frame: seconds → TC ─────────────────────────────────────────
+// Non-drop-frame: seconds to TC --------
 function tc_from_pos_ndf(pos) local(total, ts) (
   total = floor(pos * fps_int);
   enc_f = total % fps_int;
@@ -106,7 +110,7 @@ function tc_from_pos_ndf(pos) local(total, ts) (
   enc_h = floor(ts / 60) % 24;
 );
 
-// ── 29.97 drop-frame: seconds → TC ───────────────────────────────────────
+// 29.97 drop-frame: seconds to TC --------
 // SMPTE algorithm: skip frames 0 and 1 on every minute that is not a
 // multiple of 10.  Correct for all 24-hour wrap cases.
 function tc_from_pos_df(pos) local(total, d, mm, tf) (
@@ -120,7 +124,7 @@ function tc_from_pos_df(pos) local(total, d, mm, tf) (
   enc_f = tf % 30;
 );
 
-// ── Build encoder frame (80 bits) from enc_h/m/s/f ───────────────────────
+// Build encoder frame (80 bits) from enc_h/m/s/f --------
 function build_enc_frame() local(f_u, f_t, s_u, s_t, m_u, m_t, h_u, h_t,
                                   sw, i, ones) (
   // Clear
@@ -177,7 +181,7 @@ function build_enc_frame() local(f_u, f_t, s_u, s_t, m_u, m_t, h_u, h_t,
   mem[GEN_FRAME+27] = ones & 1;
 );
 
-// ── Decoder helpers ───────────────────────────────────────────────────────
+// Decoder helpers --------
 function extract_bits(start, off, cnt) local(r, i) (
   r = 0; i = 0;
   loop(cnt,
@@ -220,7 +224,7 @@ function push_bit(b) (
   bit_idx >= 80 ? check_sync();
 );
 
-// ── Initialise ────────────────────────────────────────────────────────────
+// Initialise --------
 update_params();
 build_enc_frame();
 
@@ -234,40 +238,39 @@ build_enc_frame();
 @block
 
 src_mode = floor(slider10);
+transport_running = (play_state & 1) ? 1 : 0;
 
-// ── Determine TC for encoder ──────────────────────────────────────────────
+// Determine TC for encoder --------
 src_mode == 0 ? (
-  // Transport mode: derive TC from REAPER play position
-  fps_type == 2 ? tc_from_pos_df(transport_pos) : tc_from_pos_ndf(transport_pos);
-  dec_valid = 1;
+  // Transport mode: derive TC from REAPER timeline position
+  fps_type == 2 ? tc_from_pos_df(play_position) : tc_from_pos_ndf(play_position);
+  dec_valid = transport_running;
 ) : (
   // LTC input mode: mirror last decoded TC (if valid)
   dec_valid ? (enc_h=dec_h; enc_m=dec_m; enc_s=dec_s; enc_f=dec_f;);
 );
 
-play_state = transport_playing ? 1 : 0;
-
-// ── Write gmem (CLAUDE.md protocol) ──────────────────────────────────────
+// Write gmem (CLAUDE.md protocol) --------
 gmem[TC_HOUR]          = enc_h;
 gmem[TC_MIN]           = enc_m;
 gmem[TC_SEC]           = enc_s;
 gmem[TC_FRAME]         = enc_f;
 gmem[TC_FRAMERATE]     = fps_type;
-gmem[TC_PLAY_STATE]    = play_state;
+gmem[TC_PLAY_STATE]    = transport_running;
 gmem[TC_VALID]         = dec_valid;
 gmem[TC_WRITE_COUNTER] = (gmem[TC_WRITE_COUNTER] + 1) & 65535;
 
-// ── Mirror to sliders for Lua TrackFX_GetParam readback ──────────────────
+// Mirror to sliders for Lua TrackFX_GetParam readback --------
 // Sliders 1-6: TC fields + lock + seq; slider9: peak
 // Mask bits: slider1=bit0 .. slider6=bit5, slider9=bit8 → 0x13F
 slider1=enc_h; slider2=enc_m; slider3=enc_s; slider4=enc_f;
 slider5=dec_valid; slider6=dec_seq; slider9=peak_level;
 sliderchange(0x13F);
 
-// ── Peak decay (~10 dB/s) ─────────────────────────────────────────────────
+// Peak decay (~10 dB/s) --------
 peak_level *= exp(log(0.316) * samplesblock / srate);
 
-// ── LTC lock expiry ───────────────────────────────────────────────────────
+// LTC lock expiry --------
 valid_samples > 0 ? (
   valid_samples -= samplesblock;
   valid_samples <= 0 ? (valid_samples = 0; dec_valid = 0;);
@@ -276,7 +279,7 @@ valid_samples > 0 ? (
 
 @sample
 
-// ── LTC Decoder (active in LTC input mode only) ───────────────────────────
+// LTC Decoder (active in LTC input mode only) --------
 src_mode == 1 ? (
   s     = (spl0 + spl1) * 0.5;
   abs_s = abs(s);
@@ -296,132 +299,251 @@ src_mode == 1 ? (
       bpm_state = 0;
     );
   ) : (stt += 1;);
+) : (
+  // Transport mode: no peak tracking needed
+  peak_level *= exp(log(0.316) * samplesblock / srate);
 );
 
-// ── LTC Encoder (biphase mark coding) ────────────────────────────────────
+// LTC Encoder (biphase mark coding) — Transport mode only --------
 // Each bit occupies two half-bits.  Always transition at the bit boundary
 // (start of first half); add a mid-bit transition only for '1' bits.
-gen_phase += gen_phase_inc;
-gen_phase >= 1.0 ? (
-  gen_phase -= 1.0;
-  gen_half == 0 ? (
-    // End of first half → second half: mid-bit transition for '1' bits only
-    gen_half = 1;
-    mem[GEN_FRAME + gen_bit_pos] ? (gen_out = -gen_out;);
-  ) : (
-    // End of second half → next bit boundary: always transition
-    gen_half = 0;
-    gen_out  = -gen_out;
-    gen_bit_pos = (gen_bit_pos + 1) % 80;
-    // At frame start, rebuild frame from current enc_* (set in @block)
-    gen_bit_pos == 0 ? build_enc_frame();
+src_mode == 0 && transport_running ? (
+  gen_phase += gen_phase_inc;
+  gen_phase >= 1.0 ? (
+    gen_phase -= 1.0;
+    gen_half == 0 ? (
+      // End of first half → second half: mid-bit transition for '1' bits only
+      gen_half = 1;
+      mem[GEN_FRAME + gen_bit_pos] ? (gen_out = -gen_out;);
+    ) : (
+      // End of second half → next bit boundary: always transition
+      gen_half = 0;
+      gen_out  = -gen_out;
+      gen_bit_pos = (gen_bit_pos + 1) % 80;
+      // At frame start, rebuild frame from current enc_* (set in @block)
+      gen_bit_pos == 0 ? build_enc_frame();
+    );
   );
+  
+  // Output: overwrite track audio with LTC signal (unless muted)
+  output_val = muted ? 0 : gen_out * enc_amp;
+  spl0 = output_val;
+  spl1 = output_val;
+):(
+  // No transport run: silence output in transport source mode
+  src_mode == 0 ? (spl0 = 0; spl1 = 0;);
 );
 
-// Output: overwrite track audio with LTC signal
-spl0 = gen_out * enc_amp;
-spl1 = gen_out * enc_amp;
 
+@gfx 580 240
 
-@gfx 600 220
-
-// ── Background ────────────────────────────────────────────────────────────
-gfx_r=0.11; gfx_g=0.11; gfx_b=0.13; gfx_a=1;
+// Background
+gfx_r=0.08; gfx_g=0.08; gfx_b=0.11; gfx_a=1;
 gfx_rect(0, 0, gfx_w, gfx_h, 1);
 
-// ── Script-alive indicator ────────────────────────────────────────────────
-// Detect changes in gmem[SCRIPT_ALIVE]; reset a decay counter each time.
-gmem[SCRIPT_ALIVE] != gfx_prev_alive ? (
-  gfx_prev_alive    = gmem[SCRIPT_ALIVE];
-  gfx_alive_timeout = 90;  // ~3 s at 30 fps gfx rate
-);
+// Script-alive indicator
+current_alive = gmem[SCRIPT_ALIVE];
+alive_changed = (current_alive != gfx_alive_last_value);
+gfx_alive_last_value = current_alive;
+alive_changed ? (gfx_alive_timeout = 60;);
 gfx_alive_timeout > 0 ? (gfx_alive_timeout -= 1;);
 script_running = gfx_alive_timeout > 0;
 
-gfx_setfont(1, "Arial", 12, 0);
-script_running ? (
-  gfx_r=0.2; gfx_g=0.85; gfx_b=0.35;
-  sprintf(#alive_str, "● SCRIPT RUNNING");
-) : (
-  gfx_r=0.5; gfx_g=0.5; gfx_b=0.55;
-  sprintf(#alive_str, "○ SCRIPT NOT FOUND");
-);
-gfx_a=1;
-gfx_measurestr(#alive_str, aw, ah);
-gfx_x = gfx_w - aw - 8; gfx_y = 8;
-gfx_drawstr(#alive_str);
+// Common status fields
+gfx_src = floor(slider10);
+gfx_vld = gmem[TC_VALID];
 
-// ── Large TC display ──────────────────────────────────────────────────────
-sprintf(#tc_str, "%02d:%02d:%02d:%02d",
-  gmem[TC_HOUR], gmem[TC_MIN], gmem[TC_SEC], gmem[TC_FRAME]);
-
-// Colour: orange = LTC mode, no lock; green = valid/running; dim = idle
-gfx_src  = floor(slider10);
-gfx_vld  = gmem[TC_VALID];
-gfx_src == 1 && !gfx_vld ? (
-  gfx_r=0.95; gfx_g=0.65; gfx_b=0.15;   // orange: searching
-) : gfx_vld ? (
-  gfx_r=0.20; gfx_g=0.85; gfx_b=0.35;   // green: locked / running
-) : (
-  gfx_r=0.50; gfx_g=0.50; gfx_b=0.55;   // dim: stopped, no TC
-);
-gfx_a=1;
-gfx_setfont(1, "Courier New", 72, 'b');
-gfx_measurestr(#tc_str, tw, th);
-gfx_x = (gfx_w - tw) / 2;
-gfx_y = 20;
-gfx_drawstr(#tc_str);
-
-// ── Source / framerate status line ────────────────────────────────────────
-gfx_setfont(1, "Arial", 14, 0);
 fps_type == 0 ? strcpy(#fps_str, "24fps") :
 fps_type == 1 ? strcpy(#fps_str, "25fps") :
 fps_type == 2 ? strcpy(#fps_str, "29.97DF") :
                 strcpy(#fps_str, "30fps");
 
 gfx_src == 0 ? (
-  sprintf(#status_str, "TRANSPORT   %s", #fps_str);
+  sprintf(#status_str, "Transport Mode");
 ) : gfx_vld ? (
-  sprintf(#status_str, "LTC LOCKED   %s", #fps_str);
+  sprintf(#status_str, "LTC Locked");
 ) : (
-  sprintf(#status_str, "SEARCHING   %s", #fps_str);
+  sprintf(#status_str, "Searching...");
 );
 
-gfx_r=0.5; gfx_g=0.5; gfx_b=0.55; gfx_a=1;
-gfx_measurestr(#status_str, sw, sh);
-gfx_x = (gfx_w - sw) / 2;
-gfx_y = 20 + th + 6;
+// ── Layout constants ──
+pad = 12;
+ctl_strip_h = 54;  // fixed height for bottom controls strip
+
+panel_x = pad;
+panel_y = pad;
+panel_w = gfx_w - pad * 2;
+panel_h = gfx_h - pad * 2;
+
+// Panel background
+gfx_r=0.11; gfx_g=0.12; gfx_b=0.16; gfx_a=1;
+gfx_rect(panel_x, panel_y, panel_w, panel_h, 1);
+// Panel border (subtle)
+gfx_r=0.22; gfx_g=0.24; gfx_b=0.32;
+gfx_rect(panel_x, panel_y, panel_w, 1, 1);
+gfx_rect(panel_x, panel_y + panel_h - 1, panel_w, 1, 1);
+gfx_rect(panel_x, panel_y, 1, panel_h, 1);
+gfx_rect(panel_x + panel_w - 1, panel_y, 1, panel_h, 1);
+
+// ── TC Section (top area, everything above the controls strip) ──
+tc_x = panel_x;
+tc_y = panel_y;
+tc_w = panel_w;
+tc_h = panel_h - ctl_strip_h;
+
+// Header row: "TIMECODE" left, status badge right
+gfx_setfont(1, "Arial", 10, 'b');
+gfx_r=0.55; gfx_g=0.58; gfx_b=0.68;
+gfx_x = tc_x + 12; gfx_y = tc_y + 8;
+gfx_drawstr("TIMECODE");
+
+// RUNNING / OFFLINE badge
+badge_w = 72; badge_h = 18;
+badge_x = tc_x + tc_w - badge_w - 10;
+badge_y = tc_y + 7;
+script_running ? (
+  gfx_r=0.14; gfx_g=0.52; gfx_b=0.30;
+) : (
+  gfx_r=0.50; gfx_g=0.25; gfx_b=0.25;
+);
+gfx_rect(badge_x, badge_y, badge_w, badge_h, 1);
+gfx_setfont(1, "Arial", 9, 'b');
+gfx_r=1; gfx_g=1; gfx_b=1;
+sprintf(#alive_str, script_running ? "RUNNING" : "OFFLINE");
+gfx_measurestr(#alive_str, atw, ath);
+gfx_x = badge_x + (badge_w - atw) / 2;
+gfx_y = badge_y + (badge_h - ath) / 2;
+gfx_drawstr(#alive_str);
+
+// TC digits — vertically centered in the space between header and status row
+tc_top_margin = 28;  // below header
+tc_bot_margin = 22;  // above status row
+tc_zone_top = tc_y + tc_top_margin;
+tc_zone_bot = tc_y + tc_h - tc_bot_margin;
+tc_zone_h = tc_zone_bot - tc_zone_top;
+
+sprintf(#tc_str, "%02d:%02d:%02d:%02d", gmem[TC_HOUR], gmem[TC_MIN], gmem[TC_SEC], gmem[TC_FRAME]);
+
+// TC color: green=valid, orange=searching, gray=stopped
+gfx_src == 1 && !gfx_vld ? (
+  gfx_r=0.95; gfx_g=0.68; gfx_b=0.20;
+) : gfx_vld ? (
+  gfx_r=0.20; gfx_g=0.88; gfx_b=0.38;
+) : (
+  gfx_r=0.52; gfx_g=0.54; gfx_b=0.62;
+);
+
+// Adaptive font size
+tc_font = gfx_w < 420 ? 28 : gfx_w < 560 ? 36 : gfx_w < 760 ? 44 : 52;
+gfx_setfont(1, "Courier New", tc_font, 'b');
+gfx_measurestr(#tc_str, tcw, tch);
+gfx_x = tc_x + (tc_w - tcw) / 2;
+gfx_y = tc_zone_top + (tc_zone_h - tch) / 2;
+gfx_drawstr(#tc_str);
+
+// Status row: source mode left, fps right
+gfx_setfont(1, "Arial", 10, 0);
+gfx_r=0.55; gfx_g=0.58; gfx_b=0.68;
+gfx_x = tc_x + 12; gfx_y = tc_y + tc_h - 20;
 gfx_drawstr(#status_str);
+gfx_measurestr(#fps_str, fpsw, fpsh);
+gfx_x = tc_x + tc_w - fpsw - 12; gfx_y = tc_y + tc_h - 20;
+gfx_drawstr(#fps_str);
 
-// ── Signal meter (shown in LTC input mode) ────────────────────────────────
-gfx_src == 1 ? (
-  meter_x = 20; meter_y = gfx_h - 46;
-  meter_w = gfx_w - 40; meter_h = 14;
-  meter_floor_db = -48;
+// ── Divider line ──
+gfx_r=0.22; gfx_g=0.24; gfx_b=0.32;
+ctl_y = tc_y + tc_h;
+gfx_rect(panel_x + 1, ctl_y, panel_w - 2, 1, 1);
 
-  // Track background
-  gfx_r=0.17; gfx_g=0.17; gfx_b=0.21; gfx_a=1;
-  gfx_rect(meter_x, meter_y, meter_w, meter_h, 1);
+// ── Controls strip (bottom, fixed height, always visible) ──
+ctl_x = panel_x;
+ctl_w = panel_w;
 
-  // Signal bar (dB-mapped)
-  peak_db   = peak_level > 0.0001 ? 20*log10(peak_level) : -96;
-  peak_norm = max(0, min(1, (peak_db - meter_floor_db) / (-meter_floor_db)));
-  bar_w     = floor(peak_norm * meter_w);
-  bar_w > 0 ? (
-    gfx_r=0.35; gfx_g=0.65; gfx_b=0.95; gfx_a=1;
-    gfx_rect(meter_x, meter_y, bar_w, meter_h, 1);
-  );
+btn_h = 24;
+btn_y = ctl_y + (ctl_strip_h - btn_h) / 2;
 
-  // Threshold marker
-  thr_norm = max(0, min(1, (slider8 - meter_floor_db) / (-meter_floor_db)));
-  thr_x    = meter_x + floor(thr_norm * meter_w);
-  gfx_r=0.95; gfx_g=0.65; gfx_b=0.15; gfx_a=1;
-  gfx_rect(thr_x - 1, meter_y, 2, meter_h, 1);
+// Mode button
+mode_btn_x = ctl_x + 12;
+mode_btn_w = 110;
+mode_btn_y = btn_y;
 
-  // Label
-  gfx_setfont(1, "Arial", 11, 0);
-  gfx_r=0.5; gfx_g=0.5; gfx_b=0.55; gfx_a=1;
-  sprintf(#meter_label, "Signal   Thr: %d dB", floor(slider8));
-  gfx_x = meter_x; gfx_y = meter_y + meter_h + 4;
-  gfx_drawstr(#meter_label);
+gfx_src == 0 ? (gfx_r=0.18; gfx_g=0.40; gfx_b=0.72;) : (gfx_r=0.72; gfx_g=0.38; gfx_b=0.18;);
+gfx_rect(mode_btn_x, mode_btn_y, mode_btn_w, btn_h, 1);
+gfx_r=1; gfx_g=1; gfx_b=1;
+gfx_setfont(1, "Arial", 10, 'b');
+strcpy(#mode_text, gfx_src == 0 ? "Transport" : "LTC Input");
+gfx_measurestr(#mode_text, mtw, mth);
+gfx_x = mode_btn_x + (mode_btn_w - mtw) / 2;
+gfx_y = mode_btn_y + (btn_h - mth) / 2;
+gfx_drawstr(#mode_text);
+
+// Mute button
+mute_btn_x = mode_btn_x + mode_btn_w + 8;
+mute_btn_w = 90;
+mute_btn_y = btn_y;
+
+muted ? (gfx_r=0.65; gfx_g=0.22; gfx_b=0.24;) : (gfx_r=0.18; gfx_g=0.55; gfx_b=0.28;);
+gfx_rect(mute_btn_x, mute_btn_y, mute_btn_w, btn_h, 1);
+gfx_r=1; gfx_g=1; gfx_b=1;
+strcpy(#mute_text, muted ? "MUTED" : "ACTIVE");
+gfx_measurestr(#mute_text, mutw, muth);
+gfx_x = mute_btn_x + (mute_btn_w - mutw) / 2;
+gfx_y = mute_btn_y + (btn_h - muth) / 2;
+gfx_drawstr(#mute_text);
+
+// Threshold: label + slider bar + value, right side of controls strip
+thr_label_x = mute_btn_x + mute_btn_w + 16;
+thr_value_w = 48;
+thr_value_x = ctl_x + ctl_w - thr_value_w - 12;
+thr_slider_x = thr_label_x;
+thr_slider_w = thr_value_x - thr_slider_x - 8;
+thr_slider_w < 60 ? thr_slider_w = 60;
+thr_slider_h = 10;
+thr_slider_y = btn_y + (btn_h - thr_slider_h) / 2;
+
+// Label above slider
+gfx_setfont(1, "Arial", 9, 0);
+gfx_r=0.50; gfx_g=0.53; gfx_b=0.62;
+gfx_x = thr_label_x; gfx_y = thr_slider_y - 13;
+gfx_drawstr("Threshold");
+
+// Slider track
+gfx_r=0.06; gfx_g=0.07; gfx_b=0.10;
+gfx_rect(thr_slider_x, thr_slider_y, thr_slider_w, thr_slider_h, 1);
+// Slider fill
+thr_frac = (slider8 - (-48)) / 42;
+thr_fill_w = thr_frac * thr_slider_w;
+gfx_r=0.24; gfx_g=0.56; gfx_b=0.40;
+gfx_rect(thr_slider_x, thr_slider_y, thr_fill_w, thr_slider_h, 1);
+
+// Value readout
+sprintf(#th_val_str, "%d dB", floor(slider8));
+gfx_setfont(1, "Arial", 9, 'b');
+gfx_r=0.78; gfx_g=0.80; gfx_b=0.88;
+gfx_measurestr(#th_val_str, thvw, thvh);
+gfx_x = thr_value_x + (thr_value_w - thvw) / 2;
+gfx_y = thr_slider_y + (thr_slider_h - thvh) / 2;
+gfx_drawstr(#th_val_str);
+
+// ── Interaction: Mode button click ──
+mode_btn_hit = mouse_x >= mode_btn_x && mouse_x < mode_btn_x + mode_btn_w && mouse_y >= mode_btn_y && mouse_y < mode_btn_y + btn_h;
+mode_btn_clicked = mode_btn_hit && (mouse_cap & 1) && !(last_mouse_cap & 1);
+mode_btn_clicked ? (
+  slider10 = 1 - slider10;
+  slider_automate(slider10);
 );
+
+// ── Interaction: Mute button click ──
+mute_btn_hit = mouse_x >= mute_btn_x && mouse_x < mute_btn_x + mute_btn_w && mouse_y >= mute_btn_y && mouse_y < mute_btn_y + btn_h;
+mute_btn_clicked = mute_btn_hit && (mouse_cap & 1) && !(last_mouse_cap & 1);
+mute_btn_clicked ? (muted = 1 - muted;);
+
+// ── Interaction: Threshold slider drag ──
+mouse_x >= thr_slider_x && mouse_x < thr_slider_x + thr_slider_w && mouse_y >= thr_slider_y - 4 && mouse_y < thr_slider_y + thr_slider_h + 4 && (mouse_cap & 1) ? (
+  new_thr = -48 + ((mouse_x - thr_slider_x) / thr_slider_w) * 42;
+  slider8 = max(-48, min(-6, new_thr));
+  slider_automate(slider8);
+);
+
+// Save mouse state for next frame's debouncing
+last_mouse_cap = mouse_cap;
