@@ -243,7 +243,7 @@ def read_changelog(version):
 
 
 def generate_index_xml(version):
-    """Generate ReaPack index.xml with all source files and proper metadata"""
+    """Generate ReaPack index.xml with script and effect packages"""
     from datetime import datetime
     
     # Generate ISO 8601 timestamp (UTC)
@@ -265,8 +265,8 @@ def generate_index_xml(version):
 <index version="1" name="ReaTC">
   <category name="Timecode">
     <reapack name="ReaTC.lua" type="script" desc="Art-Net and MIDI Timecode sender for REAPER">
-            <metadata>
-                <description><![CDATA[{about_rtf}]]></description>
+      <metadata>
+        <description><![CDATA[{about_rtf}]]></description>
         <link rel="website">https://github.com/paskateknikko/ReaTC</link>
         <link rel="donation">https://github.com/paskateknikko/ReaTC</link>
       </metadata>
@@ -275,11 +275,15 @@ def generate_index_xml(version):
         <source main="main" file="Scripts/ReaTC/ReaTC.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/ReaTC.lua</source>
         <source file="Scripts/ReaTC/reatc_core.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_core.lua</source>
         <source file="Scripts/ReaTC/reatc_ltc.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_ltc.lua</source>
-        <source file="Effects/ReaTC/reatc_ltc.jsfx">https://github.com/paskateknikko/ReaTC/raw/reapack/Effects/ReaTC/reatc_ltc.jsfx</source>
         <source file="Scripts/ReaTC/reatc_outputs.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_outputs.lua</source>
         <source file="Scripts/ReaTC/reatc_ui.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_ui.lua</source>
         <source file="Scripts/ReaTC/reatc_udp.py">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_udp.py</source>
         <source file="Scripts/ReaTC/reatc_mtc.py">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_mtc.py</source>
+      </version>
+    </reapack>
+    <reapack name="reatc_ltc.jsfx" type="effect" desc="LTC Decoder / Generator">
+      <version name="{version}" author="Tuukka Aimasmäki" time="{timestamp}">
+        <source main="main" file="Effects/ReaTC/reatc_ltc.jsfx">https://github.com/paskateknikko/ReaTC/raw/reapack/Effects/ReaTC/reatc_ltc.jsfx</source>
       </version>
     </reapack>
   </category>
