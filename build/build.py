@@ -151,10 +151,12 @@ def generate_index_xml(version):
         <source main="main" file="Scripts/ReaTC/ReaTC.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/ReaTC.lua</source>
         <source file="Scripts/ReaTC/reatc_core.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_core.lua</source>
         <source file="Scripts/ReaTC/reatc_ltc.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_ltc.lua</source>
+        <source file="Scripts/ReaTC/reatc_ltc_gen.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_ltc_gen.lua</source>
         <source file="Scripts/ReaTC/reatc_outputs.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_outputs.lua</source>
         <source file="Scripts/ReaTC/reatc_ui.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_ui.lua</source>
         <source file="Scripts/ReaTC/reatc_udp.py">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_udp.py</source>
         <source file="Scripts/ReaTC/reatc_mtc.py">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_mtc.py</source>
+        <source file="Scripts/ReaTC/reatc_ltcout.py">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_ltcout.py</source>
       </version>
     </reapack>
   </category>

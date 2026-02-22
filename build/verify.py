@@ -37,10 +37,12 @@ def verify():
         "Scripts/ReaTC/ReaTC.lua": None,
         "Scripts/ReaTC/reatc_core.lua": version,
         "Scripts/ReaTC/reatc_ltc.lua": None,
+        "Scripts/ReaTC/reatc_ltc_gen.lua": None,
         "Scripts/ReaTC/reatc_outputs.lua": None,
         "Scripts/ReaTC/reatc_ui.lua": None,
         "Scripts/ReaTC/reatc_udp.py": version,
         "Scripts/ReaTC/reatc_mtc.py": version,
+        "Scripts/ReaTC/reatc_ltcout.py": version,
     }
     
     missing = []

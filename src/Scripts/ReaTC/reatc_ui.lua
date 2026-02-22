@@ -1,6 +1,6 @@
 -- ReaTC UI and input handling
 
-return function(core, outputs, ltc)
+return function(core, outputs, ltc, ltc_gen)
   local M = {}
   local s = core.state
 
@@ -48,7 +48,8 @@ return function(core, outputs, ltc)
     dropdown_x = 0,
     dropdown_y = 0,
     dropdown_w = 0,
-    dropdown_selected = nil
+    dropdown_selected = nil,
+    dropdown_hover_idx = nil
   }
 
   function M.update_mouse()
@@ -166,12 +167,14 @@ return function(core, outputs, ltc)
     if hit(x, y, w, h) then
       if is_open then
         ui.dropdown_id = nil
+        ui.dropdown_hover_idx = nil
       else
         ui.dropdown_id = id
         ui.dropdown_x = x
         ui.dropdown_y = y + h
         ui.dropdown_w = w
         ui.dropdown_options = options
+        ui.dropdown_hover_idx = current_idx or 1
       end
     end
 
@@ -194,6 +197,7 @@ return function(core, outputs, ltc)
     if ui.lclick and not hover(x, y - button_h, w, button_h) and not hover(x, y, w, list_h) then
       ui.dropdown_id = nil
       ui.dropdown_selected = nil
+      ui.dropdown_hover_idx = nil
       return
     end
 
@@ -203,9 +207,13 @@ return function(core, outputs, ltc)
     for i = 1, visible_items do
       local iy = y + (i - 1) * item_h
       local item_hover = hover(x, iy, w, item_h)
+      local is_keyboard_highlight = (ui.dropdown_hover_idx == i)
 
-      if item_hover then
+      if item_hover or is_keyboard_highlight then
         fill(x, iy, w, item_h, C.btn_hi)
+        if item_hover then
+          ui.dropdown_hover_idx = i
+        end
       end
 
       sc(C.text)
@@ -216,6 +224,7 @@ return function(core, outputs, ltc)
       if item_hover and ui.lclick then
         ui.dropdown_id = nil
         ui.dropdown_selected = i
+        ui.dropdown_hover_idx = nil
         return i
       end
     end
@@ -600,9 +609,9 @@ return function(core, outputs, ltc)
     end
 
     put(x, y + 3, "Track:", C.dim)
-    local sel = dropdown("ltc_track", x + 50, y, W - 50, 20, track_labels, current_track_idx)
-    if sel and tc_count > 0 then
-      s.ltc_track_idx = sel - 1
+    dropdown("ltc_track", x + 50, y, W - 50, 20, track_labels, current_track_idx)
+    if ui.dropdown_selected and tc_count > 0 then
+      s.ltc_track_idx = ui.dropdown_selected - 1
       ltc.destroy_accessor(); s.accessor = nil; s.tc_valid = false
       s.ltc_track = reaper.GetTrack(0, s.ltc_track_idx)
       s.bit_idx = 0
@@ -612,6 +621,7 @@ return function(core, outputs, ltc)
       s.trans_count = 0
       s.peak_level = 0
       core.save_settings()
+      ui.dropdown_selected = nil
     end
     y = y + 24
 
@@ -686,6 +696,62 @@ return function(core, outputs, ltc)
       end
     end
 
+    sec_hdr(x, y, W, "  LTC Generator")
+    y = y + 24
+
+    gfx.setfont(1, "Arial", 13, 0)
+    if button(x, y, W, 28, "Generate LTC Items from Regions") then
+      ltc_gen.generate_ltc_items()
+    end
+    y = y + 32
+
+    gfx.setfont(1, "Arial", 11, 0)
+    put(x + 2, y, "Creates LTC media items on \"ReaTC LTC\" track, one per region", C.dim)
+    y = y + 14
+    put(x + 2, y, "Configure region offsets below, then click Generate", C.dim)
+    y = y + 20
+
+    -- Region offset editor
+    local regions = ltc_gen.get_regions()
+    if #regions > 0 then
+      gfx.setfont(1, "Arial", 12, string.byte("b"))
+      put(x, y, "Region Offsets:", C.text)
+      y = y + 18
+
+      gfx.setfont(1, "Arial", 11, 0)
+      for i, rgn in ipairs(regions) do
+        local region_name = rgn.name ~= "" and rgn.name or ("Region " .. rgn.index)
+        put(x, y + 3, trunc(region_name, 25), C.text)
+        
+        -- Offset display/edit
+        local offset_x = x + 200
+        local is_editing = (s.editing_region_offset == rgn.index)
+        local display_text = is_editing and (s.region_offset_text or rgn.offset) or rgn.offset
+        
+        if textfield(offset_x, y, 90, 18, display_text, is_editing) then
+          if not is_editing then
+            s.editing_region_offset = rgn.index
+            s.region_offset_text = rgn.offset
+          end
+        elseif ui.lclick and not hover(offset_x, y, 90, 18) and is_editing then
+          -- Save offset on unfocus
+          local new_offset = s.region_offset_text or rgn.offset
+          -- Validate format (basic check)
+          if new_offset:match("^%d+:%d+:%d+:%d+$") then
+            ltc_gen.set_region_offset(rgn.index, new_offset)
+          end
+          s.editing_region_offset = nil
+          s.region_offset_text = nil
+        end
+        
+        y = y + 22
+      end
+    else
+      gfx.setfont(1, "Arial", 11, 0)
+      put(x, y, "No regions in project. Create regions to generate LTC items.", C.orange)
+    end
+    y = y + 10
+
     gfx.setfont(1, "Arial", 10, 0)
     local vstr = "v" .. core.VERSION
     local vw   = gfx.measurestr(vstr)
@@ -703,7 +769,55 @@ return function(core, outputs, ltc)
   end
 
   function M.handle_key(c)
-    if not ui.ip_focused or c == 0 then return end
+    if c == 0 then return end
+    
+    -- Handle dropdown navigation
+    if ui.dropdown_id then
+      if c == 30064 then  -- Up arrow
+        if ui.dropdown_hover_idx and ui.dropdown_hover_idx > 1 then
+          ui.dropdown_hover_idx = ui.dropdown_hover_idx - 1
+        end
+        return
+      elseif c == 1685026670 then  -- Down arrow
+        if ui.dropdown_hover_idx and ui.dropdown_hover_idx < #ui.dropdown_options then
+          ui.dropdown_hover_idx = ui.dropdown_hover_idx + 1
+        end
+        return
+      elseif c == 13 then  -- Enter
+        if ui.dropdown_hover_idx then
+          ui.dropdown_selected = ui.dropdown_hover_idx
+          ui.dropdown_id = nil
+          ui.dropdown_hover_idx = nil
+        end
+        return
+      elseif c == 27 then  -- Escape
+        ui.dropdown_id = nil
+        ui.dropdown_hover_idx = nil
+        return
+      end
+    end
+    
+    -- Handle region offset editing
+    if s.editing_region_offset then
+      if c == 13 then  -- Enter
+        ltc_gen.set_region_offset(s.editing_region_offset, s.region_offset_text or "00:00:00:00")
+        s.editing_region_offset = nil
+        return
+      elseif c == 27 then  -- Escape
+        s.editing_region_offset = nil
+        return
+      elseif c == 8 or c == 127 then  -- Backspace/Delete
+        if s.region_offset_text and #s.region_offset_text > 0 then
+          s.region_offset_text = s.region_offset_text:sub(1, -2)
+        end
+        return
+      elseif (c >= 48 and c <= 57) or c == 58 then  -- 0-9 or colon
+        s.region_offset_text = (s.region_offset_text or "") .. string.char(c)
+        return
+      end
+    end
+    
+    if not ui.ip_focused then return end
 
     local shift_held = (gfx.mouse_cap & 8) ~= 0
 

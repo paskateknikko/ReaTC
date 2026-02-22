@@ -113,6 +113,10 @@ M.state = {
 
   -- Playback tracking (for accessor lifecycle)
   was_playing = false,
+
+  -- LTC Generator
+  editing_region_offset = nil,
+  region_offset_text = nil,
 }
 
 -- Initialise bit buffer

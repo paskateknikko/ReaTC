@@ -21,7 +21,8 @@ end
 local core = dofile(script_path .. "reatc_core.lua")
 local ltc = dofile(script_path .. "reatc_ltc.lua")(core)
 local outputs = dofile(script_path .. "reatc_outputs.lua")(core)
-local ui = dofile(script_path .. "reatc_ui.lua")(core, outputs, ltc)
+local ltc_gen = dofile(script_path .. "reatc_ltc_gen.lua")(core)
+local ui = dofile(script_path .. "reatc_ui.lua")(core, outputs, ltc, ltc_gen)
 
 local state = core.state
 

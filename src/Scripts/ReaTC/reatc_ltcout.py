@@ -2,12 +2,14 @@
 # ReaTC — https://github.com/<org>/ReaTC
 # Copyright (c) 2025 Tuukka Aimasmäki. MIT License — see LICENSE.
 #
-# LTC (Linear Timecode) Audio Output Daemon
+# LTC (Linear Timecode) Audio Output Daemon / WAV Generator
 # Persistent process that encodes timecode as LTC audio and outputs it.
 #
 # Usage:
 #   python3 reatc_ltcout.py [device_name]   -- start daemon, reads commands from stdin
 #   python3 reatc_ltcout.py --list-devices  -- print available audio output devices
+#   python3 reatc_ltcout.py --generate <file> <H> <M> <S> <F> <type> <duration>
+#                                              -- generate LTC WAV file
 #
 # Stdin protocol (one command per line):
 #   play H M S F type   -- start/continue playback at given TC position
@@ -24,9 +26,16 @@ import sys
 import time
 import threading
 import collections
+import wave
+import struct
 
 try:
     import numpy as np
+    NP_AVAILABLE = True
+except ImportError:
+    NP_AVAILABLE = False
+
+try:
     import sounddevice as sd
     SD_AVAILABLE = True
 except ImportError:
@@ -49,6 +58,67 @@ def list_devices():
     for i, d in enumerate(devices):
         if d['max_output_channels'] > 0:
             print(f"{i}: {d['name']}")
+
+
+def generate_ltc_wav(filename, h, m, s, f, tc_type, duration):
+    """Generate LTC WAV file with specified timecode and duration.
+    
+    Parameters
+    ----------
+    filename : str        Output WAV file path
+    h, m, s, f : int      Starting timecode
+    tc_type : int         Frame rate type (0-3)
+    duration : float      Duration in seconds
+    """
+    if not NP_AVAILABLE:
+        print("ERROR: numpy not installed. Run: pip3 install numpy", file=sys.stderr)
+        return False
+    
+    fps = FPS_TABLE.get(tc_type, 25.0)
+    total_samples = int(duration * SAMPLE_RATE)
+    
+    # Generate LTC audio
+    audio_data = []
+    level = 1
+    ideal_pos = 0.0
+    current_h, current_m, current_s, current_f = h, m, s, f
+    samples_generated = 0
+    
+    while samples_generated < total_samples:
+        # Generate one frame
+        frame_samples, level, ideal_pos = encode_ltc_frame(
+            current_h, current_m, current_s, current_f,
+            tc_type, level, ideal_pos
+        )
+        
+        audio_data.append(frame_samples)
+        samples_generated += len(frame_samples)
+        
+        # Advance to next frame
+        current_h, current_m, current_s, current_f = _advance_frame(
+            current_h, current_m, current_s, current_f, tc_type
+        )
+    
+    # Concatenate all frames
+    audio_array = np.concatenate(audio_data)
+    
+    # Trim to exact duration
+    audio_array = audio_array[:total_samples]
+    
+    # Convert to 16-bit PCM at -6dB (0.5 amplitude)
+    audio_int16 = (audio_array * 32767 * 0.5).astype(np.int16)
+    
+    # Write WAV file
+    try:
+        with wave.open(filename, 'wb') as wav_file:
+            wav_file.setnchannels(1)  # Mono
+            wav_file.setsampwidth(2)  # 16-bit
+            wav_file.setframerate(SAMPLE_RATE)
+            wav_file.writeframes(audio_int16.tobytes())
+        return True
+    except Exception as e:
+        print(f"ERROR writing WAV file: {e}", file=sys.stderr)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +369,33 @@ def main():
     if "--list-devices" in sys.argv:
         list_devices()
         return
-
+    
+    # Handle WAV file generation mode
+    if "--generate" in sys.argv:
+        try:
+            idx = sys.argv.index("--generate")
+            if len(sys.argv) < idx + 8:
+                print("Usage: reatc_ltcout.py --generate <file> <H> <M> <S> <F> <type> <duration>",
+                      file=sys.stderr)
+                sys.exit(1)
+            
+            filename = sys.argv[idx + 1]
+            h = int(sys.argv[idx + 2])
+            m = int(sys.argv[idx + 3])
+            s = int(sys.argv[idx + 4])
+            f = int(sys.argv[idx + 5])
+            tc_type = int(sys.argv[idx + 6])
+            duration = float(sys.argv[idx + 7])
+            
+            if generate_ltc_wav(filename, h, m, s, f, tc_type, duration):
+                sys.exit(0)
+            else:
+                sys.exit(1)
+        except (ValueError, IndexError) as e:
+            print(f"ERROR: Invalid arguments - {e}", file=sys.stderr)
+            sys.exit(1)
+    
+    # Daemon mode
     if not SD_AVAILABLE:
         print("ERROR: sounddevice/numpy not installed. "
               "Run: pip3 install sounddevice numpy", file=sys.stderr)
