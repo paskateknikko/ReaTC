@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-02-22
+
+### Changed
+
+- ReaPack URLs now use the github.com/.../raw/... format
+- ReaPack index generation uses changelog entries for release notes
+
 ## [0.0.3] - 2026-02-22
 
 ### Added
