@@ -5,20 +5,46 @@
             <metadata>
                 <description><![CDATA[{\rtf1\ansi\deff0
 {\fonttbl{\f0 Helvetica;}}
-\f0\fs22\b ReaTC\b0\par
-Art-Net and MIDI Timecode sender for REAPER.\par
-Supports transport timecode or LTC audio input.\par
+\f0\fs22
+\b\fs26 ReaTC\b0\fs22\par
+\par
+Sends \b Art-Net TimeCode\b0  and \b MIDI Timecode\b0  from REAPER.\par
+Decodes incoming LTC audio via a bundled JSFX plugin.\par
+\par
+\b Features\b0\par
+  - Art-Net TimeCode broadcast (configurable destination IP)\par
+  - MIDI Timecode (MTC) output via virtual or physical MIDI port\par
+  - LTC audio decoder (JSFX, real-time, no REAPER extensions required)\par
+  - 24fps (Film), 25fps (EBU), 29.97 DF, 30fps (SMPTE)\par
+  - Fallback to REAPER timeline when no LTC signal\par
+\par
+\b Requirements\b0\par
+  - REAPER 6.0+\par
+  - ReaImGui (install from ReaPack \u8594? ReaTeam Extensions \u8594? ReaImGui)\par
+  - Python 3 (pre-installed on macOS; Windows Store / python.org on Windows)\par
+  - python-rtmidi (auto-installed on first MTC enable)\par
+\par
+\b Links\b0\par
+  - GitHub\par
 }]]></description>
         <link rel="website">https://github.com/paskateknikko/ReaTC</link>
         <link rel="donation">https://github.com/paskateknikko/ReaTC</link>
       </metadata>
-      <version name="0.0.5" author="Tuukka Aimasmäki" time="2026-02-22T15:12:09Z">
+      <version name="1.0.0" author="Tuukka Aimasmäki" time="2026-02-22T20:01:36Z">
         <changelog><![CDATA[### Added
 
-- ReaPack About text via RTF description]]></changelog>
+- ReaImGui UI: all settings widgets (checkbox, combo, slider, IP input) now use native ReaImGui controls — no more custom gfx primitives
+- ReaPack `@about` metadata block in `ReaTC.lua` (Markdown, rendered in ReaPack's "About" dialog)
+- `build.py`: `parse_about_from_script()` extracts the `@about` block and converts it to RTF for `index.xml` — single source of truth for package description
+
+### Changed
+
+- **Requires ReaImGui** (install via ReaPack → ReaTeam Extensions → ReaImGui); script shows a dialog and exits gracefully if missing
+- `reatc_ui.lua` fully rewritten: removed `update_mouse()`, `handle_key()`, and all `gfx.*` helper functions]]></changelog>
         <source main="main" file="Scripts/ReaTC/ReaTC.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/ReaTC.lua</source>
         <source file="Scripts/ReaTC/reatc_core.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_core.lua</source>
         <source file="Scripts/ReaTC/reatc_ltc.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_ltc.lua</source>
+        <source file="Effects/ReaTC/reatc_ltc.jsfx">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Effects/ReaTC/reatc_ltc.jsfx</source>
         <source file="Scripts/ReaTC/reatc_outputs.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_outputs.lua</source>
         <source file="Scripts/ReaTC/reatc_ui.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_ui.lua</source>
         <source file="Scripts/ReaTC/reatc_udp.py">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_udp.py</source>

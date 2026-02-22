@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.0.0] - 2026-02-22
+
+### Added
+
+- ReaImGui UI: all settings widgets (checkbox, combo, slider, IP input) now use native ReaImGui controls — no more custom gfx primitives
+- ReaPack `@about` metadata block in `ReaTC.lua` (Markdown, rendered in ReaPack's "About" dialog)
+- `build.py`: `parse_about_from_script()` extracts the `@about` block and converts it to RTF for `index.xml` — single source of truth for package description
+
+### Changed
+
+- **Requires ReaImGui** (install via ReaPack → ReaTeam Extensions → ReaImGui); script shows a dialog and exits gracefully if missing
+- `reatc_ui.lua` fully rewritten: removed `update_mouse()`, `handle_key()`, and all `gfx.*` helper functions
+
 ## [0.0.5] - 2026-02-22
 
 ### Added
