@@ -1,0 +1,61 @@
+name: Check
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    name: Validate metadata and syntax
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Check version.txt is valid
+        run: |
+          if [ ! -f version.txt ]; then
+            echo "ERROR: version.txt not found"
+            exit 1
+          fi
+          VERSION=$(cat version.txt | tr -d '\n\r ' | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+(-.+)?')
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: version.txt has invalid format. Expected: X.Y.Z or X.Y.Z-prerelease"
+            exit 1
+          fi
+          echo "✓ version.txt valid: $VERSION"
+
+      - name: Check CHANGELOG.md has entry for version
+        run: |
+          VERSION=$(cat version.txt | tr -d '\n\r ')
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: version.txt is empty"
+            exit 1
+          fi
+          if ! grep -q "## \[$VERSION\]" CHANGELOG.md 2>/dev/null; then
+            echo "ERROR: CHANGELOG.md missing entry for v$VERSION"
+            echo "Please add: ## [$VERSION] - $(date +%Y-%m-%d)"
+            exit 1
+          fi
+          echo "✓ CHANGELOG.md has entry for v$VERSION"
+
+      - name: Validate Lua syntax
+        run: |
+          apt-get update -qq && apt-get install -y -qq luacheck > /dev/null 2>&1
+          echo "Checking Lua files..."
+          luacheck src/Scripts/ReaTC/*.lua --ignore 631 --quiet
+          echo "✓ All Lua files passed syntax check"
+
+      - name: Validate Python syntax
+        run: |
+          echo "Checking Python files..."
+          python3 -m py_compile src/Scripts/ReaTC/reatc_udp.py
+          python3 -m py_compile src/Scripts/ReaTC/reatc_mtc.py
+          echo "✓ All Python files passed syntax check"

@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   release:
+    needs: check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,6 +31,28 @@ jobs:
         run: |
           python3 setup.py
           make build
+      
+      - name: Verify build artifacts
+        run: |
+          REQUIRED_FILES=(
+            "dist/LICENSE"
+            "dist/README.md"
+            "dist/Scripts/ReaTC/ReaTC.lua"
+            "dist/Scripts/ReaTC/reatc_core.lua"
+            "dist/Scripts/ReaTC/reatc_ltc.lua"
+            "dist/Scripts/ReaTC/reatc_outputs.lua"
+            "dist/Scripts/ReaTC/reatc_ui.lua"
+            "dist/Scripts/ReaTC/reatc_udp.py"
+            "dist/Scripts/ReaTC/reatc_mtc.py"
+            "dist/Effects/ReaTC/reatc_ltc.jsfx"
+          )
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "ERROR: Missing required file: $file"
+              exit 1
+            fi
+          done
+          echo "✓ All build artifacts verified"
       
       - name: Extract version from tag
         id: version
