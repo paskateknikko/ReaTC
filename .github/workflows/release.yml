@@ -19,6 +19,11 @@ jobs:
         with:
           python-version: '3.x'
       
+      - name: Set version from tag
+        run: |
+          VERSION="${{ github.ref_name }}"
+          echo "${VERSION#v}" > version.txt
+      
       - name: Build package
         run: |
           python3 setup.py
