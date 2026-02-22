@@ -30,7 +30,7 @@ Decodes incoming LTC audio via a bundled JSFX plugin.\par
         <link rel="website">https://github.com/paskateknikko/ReaTC</link>
         <link rel="donation">https://github.com/paskateknikko/ReaTC</link>
       </metadata>
-      <version name="1.0.0" author="Tuukka Aimasmäki" time="2026-02-22T20:01:36Z">
+      <version name="1.0.0" author="Tuukka Aimasmäki" time="2026-02-22T20:49:31Z">
         <changelog><![CDATA[### Added
 
 - ReaImGui UI: all settings widgets (checkbox, combo, slider, IP input) now use native ReaImGui controls — no more custom gfx primitives

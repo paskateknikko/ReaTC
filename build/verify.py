@@ -37,6 +37,7 @@ def verify():
         "Scripts/ReaTC/ReaTC.lua": None,
         "Scripts/ReaTC/reatc_core.lua": version,
         "Scripts/ReaTC/reatc_ltc.lua": None,
+        "Effects/ReaTC/reatc_ltc.jsfx": version,
         "Scripts/ReaTC/reatc_outputs.lua": None,
         "Scripts/ReaTC/reatc_ui.lua": None,
         "Scripts/ReaTC/reatc_udp.py": version,
