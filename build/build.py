@@ -84,10 +84,13 @@ def build():
         
         # Generate index.xml for ReaPack
         index_xml = generate_index_xml(version)
-        index_path = DIST_DIR / "index.xml"
-        with open(index_path, "w") as f:
-            f.write(index_xml)
-        print(f"  ✓ index.xml")
+        root_index_path = REPO_ROOT / "index.xml"
+        dist_index_path = DIST_DIR / "index.xml"
+        for index_path in [root_index_path, dist_index_path]:
+            with open(index_path, "w") as f:
+                f.write(index_xml)
+        print("  ✓ index.xml (repo root)")
+        print("  ✓ index.xml (dist)")
         
         print()
         print(f"✓ Build complete: {DIST_DIR}")

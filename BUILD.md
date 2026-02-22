@@ -19,7 +19,7 @@ The project uses a **simple Python-based build** with a `Makefile` wrapper for c
 1. **Version substitution** — reads `version.txt` and replaces `{{VERSION}}` placeholders in source files
 2. **File copying** — copies all source files to `dist/Scripts/ReaTC/`
 3. **Metadata** — copies `LICENSE`, `README.md` to `dist/`
-4. **ReaPack index** — generates `dist/index.xml` for package distribution
+4. **ReaPack index** — generates `index.xml` in the repo root (and a copy in `dist/`)
 
 ### Directory structure after build:
 
@@ -27,7 +27,7 @@ The project uses a **simple Python-based build** with a `Makefile` wrapper for c
 dist/
 ├── LICENSE
 ├── README.md
-├── index.xml                    ← for ReaPack
+├── index.xml                    ← copy for release artifacts
 └── Scripts/
     └── ReaTC/
         ├── ReaTC.lua            ← Version substituted
@@ -105,8 +105,8 @@ python3 setup.py
 make build
 make verify
 
-# Check dist/index.xml has correct version, author, and URLs
-cat dist/index.xml
+# Check index.xml has correct version, author, and URLs
+cat index.xml
 ```
 
 ### 3. Commit Changes
@@ -152,7 +152,7 @@ git push origin v0.0.2
 1. Check GitHub repository "Releases" tab for new release
 2. Verify `ReaTC-*.zip` artifact is attached
 3. In REAPER: Extensions > ReaPack > Manage repositories
-4. Repositories should reflect the new version available from `https://raw.githubusercontent.com/paskateknikko/ReaTC/gh-pages/index.xml`
+4. Repositories should reflect the new version available from `https://raw.githubusercontent.com/paskateknikko/ReaTC/main/index.xml`
 
 ## CI/CD Integration
 
