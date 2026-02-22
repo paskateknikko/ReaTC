@@ -88,15 +88,12 @@ def build():
                 shutil.copy2(src, dst)
                 print(f"  ✓ {filename}")
         
-        # Generate index.xml for ReaPack
+        # Generate index.xml for ReaPack (dist only, published to reapack branch)
         index_xml = generate_index_xml(version)
-        root_index_path = REPO_ROOT / "index.xml"
         dist_index_path = DIST_DIR / "index.xml"
-        for index_path in [root_index_path, dist_index_path]:
-            with open(index_path, "w") as f:
-                f.write(index_xml)
-        print("  ✓ index.xml (repo root)")
-        print("  ✓ index.xml (dist)")
+        with open(dist_index_path, "w") as f:
+            f.write(index_xml)
+        print("  ✓ index.xml (dist → reapack)")
         
         print()
         print(f"✓ Build complete: {DIST_DIR}")
