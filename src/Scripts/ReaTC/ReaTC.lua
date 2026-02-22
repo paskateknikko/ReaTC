@@ -1,15 +1,40 @@
--- ReaTC — https://github.com/<org>/ReaTC
+-- @description Art-Net and MIDI Timecode sender for REAPER
+-- @author Tuukka Aimasmäki
+-- @version {{VERSION}}
+-- @about
+--   # ReaTC
+--
+--   Sends **Art-Net TimeCode** and **MIDI Timecode** from REAPER.
+--   Decodes incoming LTC audio via a bundled JSFX plugin.
+--
+--   ## Features
+--   - Art-Net TimeCode broadcast (configurable destination IP)
+--   - MIDI Timecode (MTC) output via virtual or physical MIDI port
+--   - LTC audio decoder (JSFX, real-time, no REAPER extensions required)
+--   - 24fps (Film), 25fps (EBU), 29.97 DF, 30fps (SMPTE)
+--   - Fallback to REAPER timeline when no LTC signal
+--
+--   ## Requirements
+--   - REAPER 6.0+
+--   - ReaImGui (install from ReaPack → ReaTeam Extensions → ReaImGui)
+--   - Python 3 (pre-installed on macOS; Windows Store / python.org on Windows)
+--   - python-rtmidi (auto-installed on first MTC enable)
+--
+--   ## Links
+--   - [GitHub](https://github.com/paskateknikko/ReaTC)
+
+-- ReaTC — https://github.com/paskateknikko/ReaTC
 -- Copyright (c) 2025 Tuukka Aimasmaki. MIT License — see LICENSE.
 --
 -- Sends Art-Net TimeCode and MIDI Timecode from REAPER.
--- Decodes LTC audio from a track via REAPER audio accessor.
---
--- Requirements:
--- - REAPER 6.0+
--- - Python 3 (pre-installed on macOS; Windows Store / python.org on Windows)
--- - python-rtmidi  (auto-installed on first MTC enable, MIT license)
---
--- No REAPER extensions required (no ReaImGui, no SWS, no JSFX).
+-- Decodes LTC audio from a track via a JSFX plugin (reatc_ltc.jsfx).
+
+if not reaper.ImGui_GetBuiltinPath then
+  reaper.MB(
+    'ReaImGui not installed.\n\nInstall it from ReaPack (ReaTeam Extensions → ReaImGui).',
+    'ReaTC', 0)
+  return
+end
 
 local script_path
 
@@ -18,10 +43,10 @@ do
   script_path = info.source:match("@(.+[\\/])") or ""
 end
 
-local core = dofile(script_path .. "reatc_core.lua")
-local ltc = dofile(script_path .. "reatc_ltc.lua")(core)
+local core    = dofile(script_path .. "reatc_core.lua")
+local ltc     = dofile(script_path .. "reatc_ltc.lua")(core)
 local outputs = dofile(script_path .. "reatc_outputs.lua")(core)
-local ui = dofile(script_path .. "reatc_ui.lua")(core, outputs, ltc)
+local ui      = dofile(script_path .. "reatc_ui.lua")(core, outputs, ltc)
 
 local state = core.state
 
@@ -53,54 +78,28 @@ local function init()
     end
   end
 
-  gfx.init("ReaTC v" .. core.VERSION, core.MIN_WIN_W, core.MIN_WIN_H)
-  gfx.setfont(1, "Arial", 13, 0)
+  ui.init()
 end
 
 local function loop()
-  local c = gfx.getchar()
-  if c == -1 then
-    -- Window closed → clean up
+  if not ui.draw_ui() then
+    -- Window closed — clean up
     ltc.destroy_accessor()
     outputs.stop_mtc_daemon()
     core.save_settings()
     return  -- do NOT defer again
   end
 
-  ui.handle_key(c)
-  ui.update_mouse()
   core.update_transport_tc()
 
-  -- LTC decode
   if state.ltc_enabled and state.ltc_track then
-    local playing = (reaper.GetPlayState() & 1) == 1
-    if playing then
-      ltc.decode_ltc_chunk()
-      state.was_playing = true
-      -- Invalidate TC if no valid sync detected for 0.5 seconds (likely no signal)
-      if state.tc_valid and
-         reaper.time_precise() - state.last_valid_time > 0.5 then
-        state.tc_valid = false
-      end
-    else
-      if state.was_playing then
-        ltc.destroy_accessor()  -- reset; will be re-created on next play
-      end
-      state.was_playing = false
-      -- When stopped, invalidate TC after 1 second of no signal
-      if state.tc_valid and
-         reaper.time_precise() - state.last_valid_time > 1.0 then
-        state.tc_valid = false
-      end
-    end
+    ltc.update_jsfx()
   else
     state.tc_valid = false
   end
 
   outputs.send_artnet()
   outputs.send_mtc()
-  ui.draw_ui()
-  gfx.update()
 
   reaper.defer(loop)
 end

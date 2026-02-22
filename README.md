@@ -23,6 +23,7 @@ Send Art-Net TimeCode and MIDI TimeCode (MTC) from REAPER to lighting consoles l
 ## Requirements
 
 - **REAPER 6.0+**
+- **ReaImGui** — install via ReaPack: Extensions → ReaPack → Browse packages → search "ReaImGui" (ReaTeam Extensions)
 - **Python 3** (pre-installed on macOS; install from Microsoft Store or https://python.org on Windows)
 - **python-rtmidi** (optional, for MTC output): automatically installed on first MTC enable via `pip3 install python-rtmidi`
 
