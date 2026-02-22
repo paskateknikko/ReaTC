@@ -32,7 +32,7 @@ Send Art-Net TimeCode and MIDI TimeCode (MTC) from REAPER to lighting consoles l
 
 1. Install [ReaPack](https://reapack.com/) if you haven't already
 2. Extensions > ReaPack > Import repositories
-3. Add: `https://raw.githubusercontent.com/paskateknikko/ReaTC/main/index.xml`
+3. Add: `https://github.com/paskateknikko/ReaTC/raw/main/index.xml`
 4. Extensions > ReaPack > Browse packages
 5. Search "ReaTC" and install
 

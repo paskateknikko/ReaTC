@@ -152,7 +152,7 @@ git push origin v0.0.2
 1. Check GitHub repository "Releases" tab for new release
 2. Verify `ReaTC-*.zip` artifact is attached
 3. In REAPER: Extensions > ReaPack > Manage repositories
-4. Repositories should reflect the new version available from `https://raw.githubusercontent.com/paskateknikko/ReaTC/main/index.xml`
+4. Repositories should reflect the new version available from `https://github.com/paskateknikko/ReaTC/raw/main/index.xml`
 
 ## CI/CD Integration
 

@@ -118,13 +118,13 @@ def generate_index_xml(version):
       </metadata>
       <version name="{version}" author="Tuukka Aimasmäki" time="{timestamp}">
         <changelog><![CDATA[Release {version}. See https://github.com/paskateknikko/ReaTC/releases/tag/v{version} for details.]]></changelog>
-        <source file="Scripts/ReaTC/ReaTC.lua">https://raw.githubusercontent.com/paskateknikko/ReaTC/gh-pages/Scripts/ReaTC/ReaTC.lua</source>
-        <source file="Scripts/ReaTC/reatc_core.lua">https://raw.githubusercontent.com/paskateknikko/ReaTC/gh-pages/Scripts/ReaTC/reatc_core.lua</source>
-        <source file="Scripts/ReaTC/reatc_ltc.lua">https://raw.githubusercontent.com/paskateknikko/ReaTC/gh-pages/Scripts/ReaTC/reatc_ltc.lua</source>
-        <source file="Scripts/ReaTC/reatc_outputs.lua">https://raw.githubusercontent.com/paskateknikko/ReaTC/gh-pages/Scripts/ReaTC/reatc_outputs.lua</source>
-        <source file="Scripts/ReaTC/reatc_ui.lua">https://raw.githubusercontent.com/paskateknikko/ReaTC/gh-pages/Scripts/ReaTC/reatc_ui.lua</source>
-        <source file="Scripts/ReaTC/reatc_udp.py">https://raw.githubusercontent.com/paskateknikko/ReaTC/gh-pages/Scripts/ReaTC/reatc_udp.py</source>
-        <source file="Scripts/ReaTC/reatc_mtc.py">https://raw.githubusercontent.com/paskateknikko/ReaTC/gh-pages/Scripts/ReaTC/reatc_mtc.py</source>
+        <source file="Scripts/ReaTC/ReaTC.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/ReaTC.lua</source>
+        <source file="Scripts/ReaTC/reatc_core.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_core.lua</source>
+        <source file="Scripts/ReaTC/reatc_ltc.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_ltc.lua</source>
+        <source file="Scripts/ReaTC/reatc_outputs.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_outputs.lua</source>
+        <source file="Scripts/ReaTC/reatc_ui.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_ui.lua</source>
+        <source file="Scripts/ReaTC/reatc_udp.py">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_udp.py</source>
+        <source file="Scripts/ReaTC/reatc_mtc.py">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_mtc.py</source>
       </version>
     </reapack>
   </category>
