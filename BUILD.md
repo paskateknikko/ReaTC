@@ -141,6 +141,7 @@ git push origin v0.0.2
 - ✅ Detects the `v*` tag
 - ✅ Builds the package with `make build`
 - ✅ Generates `dist/index.xml` with all source files
+- ✅ Publishes `dist/` to the `gh-pages` branch for ReaPack hosting
 - ✅ Creates Release asset: `ReaTC-0.0.2.zip`
 - ✅ Extracts release notes from CHANGELOG.md
 - ✅ Creates GitHub Release with artifact attached
@@ -151,7 +152,7 @@ git push origin v0.0.2
 1. Check GitHub repository "Releases" tab for new release
 2. Verify `ReaTC-*.zip` artifact is attached
 3. In REAPER: Extensions > ReaPack > Manage repositories
-4. Repositories should reflect the new version available
+4. Repositories should reflect the new version available from `https://raw.githubusercontent.com/paskateknikko/ReaTC/gh-pages/index.xml`
 
 ## CI/CD Integration
 

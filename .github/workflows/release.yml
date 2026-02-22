@@ -48,6 +48,13 @@ jobs:
           cd dist
           zip -r "../ReaTC-${{ steps.version.outputs.version }}.zip" .
           ls -lh "../ReaTC-${{ steps.version.outputs.version }}.zip"
+
+      - name: Publish ReaPack files to gh-pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: dist
+          publish_branch: gh-pages
       
       - name: Upload release with artifacts
         uses: softprops/action-gh-release@v1
