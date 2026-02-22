@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+# ReaTC — https://github.com/<org>/ReaTC
+# Copyright (c) 2025 Tuukka Aimasmäki. MIT License — see LICENSE.
+#
+# MTC (MIDI Timecode) Daemon
+# Persistent process that sends MIDI Timecode quarter-frame messages.
+#
+# Usage:
+#   python3 reatc_mtc.py [port_name]  -- start daemon, reads commands from stdin
+#   python3 reatc_mtc.py --list-ports -- print available MIDI output ports
+#
+# Stdin protocol (one command per line):
+#   play H M S F type   -- start/continue playback at given TC position
+#   stop H M S F type   -- stop playback and send full-frame locate message
+#
+#   type: 0=24fps  1=25fps  2=29.97DF  3=30fps
+#
+# Requirements:
+#   pip3 install python-rtmidi
+
+__version__ = "{{VERSION}}"
+
+import sys
+import time
+import threading
+
+try:
+    import rtmidi
+    RTMIDI_AVAILABLE = True
+except ImportError:
+    RTMIDI_AVAILABLE = False
+
+# Frames per second for each type
+FPS_TABLE = {0: 24.0, 1: 25.0, 2: 29.97, 3: 30.0}
+# Integer frame count for drop-frame (30 frames counted per second)
+INT_FPS_TABLE = {0: 24, 1: 25, 2: 30, 3: 30}
+# MTC type bits encoded in hours byte
+MTC_TYPE_BITS = {0: 0, 1: 1, 2: 2, 3: 3}
+
+
+def list_ports():
+    if not RTMIDI_AVAILABLE:
+        print("ERROR: python-rtmidi not installed. Run: pip3 install python-rtmidi")
+        return
+    out = rtmidi.MidiOut()
+    ports = out.get_ports()
+    del out
+    if ports:
+        for i, name in enumerate(ports):
+            print(f"{i}: {name}")
+    else:
+        print("(no hardware MIDI ports found - will use virtual port)")
+
+
+class MTCDaemon:
+    def __init__(self, port_name=None):
+        self._midi_out = rtmidi.MidiOut()
+        ports = self._midi_out.get_ports()
+
+        opened = False
+        if port_name and ports:
+            for i, name in enumerate(ports):
+                if port_name.lower() in name.lower():
+                    self._midi_out.open_port(i)
+                    opened = True
+                    break
+
+        if not opened:
+            if ports and not port_name:
+                self._midi_out.open_port(0)
+            else:
+                self._midi_out.open_virtual_port("REAPER MTC Out")
+
+        self._lock = threading.Lock()
+        self._playing = False
+        self._tc = [0, 0, 0, 0]       # h, m, s, f  (current frame being sent)
+        self._tc_type = 1
+        self._pending_sync = None      # position to snap to at next QF cycle start
+        self._qf_piece = 0             # 0–7: which quarter-frame piece to send next
+        self._running = True
+
+        self._thread = threading.Thread(target=self._qf_loop, daemon=True)
+        self._thread.start()
+
+    # ------------------------------------------------------------------
+    # Internal helpers (called from QF thread, lock already held)
+    # ------------------------------------------------------------------
+
+    def _advance_frame(self):
+        h, m, s, f = self._tc
+        int_fps = INT_FPS_TABLE.get(self._tc_type, 25)
+        f += 1
+        if f >= int_fps:
+            f = 0
+            s += 1
+            if s >= 60:
+                s = 0
+                m += 1
+                if m >= 60:
+                    m = 0
+                    h = (h + 1) % 24
+        self._tc = [h, m, s, f]
+
+    def _make_qf_byte(self, piece):
+        h, m, s, f = self._tc
+        type_bits = self._tc_type & 0x03
+        nibbles = [
+            f & 0x0F,
+            (f >> 4) & 0x01,
+            s & 0x0F,
+            (s >> 4) & 0x03,
+            m & 0x0F,
+            (m >> 4) & 0x03,
+            h & 0x0F,
+            ((type_bits << 1) | ((h >> 4) & 0x01)),
+        ]
+        return (piece << 4) | nibbles[piece]
+
+    def _send_full_frame(self, h, m, s, f, tc_type):
+        """MTC full-frame SysEx locate message."""
+        type_bits = tc_type & 0x03
+        hours_byte = (type_bits << 5) | (h & 0x1F)
+        sysex = [0xF0, 0x7F, 0x7F, 0x01, 0x01,
+                 hours_byte, m & 0x3F, s & 0x3F, f & 0x1F, 0xF7]
+        self._midi_out.send_message(sysex)
+
+    # ------------------------------------------------------------------
+    # QF sender thread
+    # ------------------------------------------------------------------
+
+    def _qf_loop(self):
+        next_send = time.perf_counter()
+
+        while self._running:
+            now = time.perf_counter()
+
+            with self._lock:
+                playing = self._playing
+                tc_type = self._tc_type
+                fps = FPS_TABLE.get(tc_type, 25.0)
+                interval = 1.0 / (fps * 4.0)  # QF message interval
+
+            if playing and now >= next_send:
+                with self._lock:
+                    # At the start of a new 8-piece cycle, accept any pending sync
+                    if self._qf_piece == 0 and self._pending_sync is not None:
+                        h, m, s, f, t = self._pending_sync
+                        self._tc = [h, m, s, f]
+                        self._tc_type = t
+                        self._pending_sync = None
+                        fps = FPS_TABLE.get(t, 25.0)
+                        interval = 1.0 / (fps * 4.0)
+
+                    data = self._make_qf_byte(self._qf_piece)
+                    self._qf_piece += 1
+                    if self._qf_piece >= 8:
+                        self._qf_piece = 0
+                        self._advance_frame()
+
+                self._midi_out.send_message([0xF1, data])
+                next_send += interval
+
+                # Drift recovery: don't build up debt beyond one interval
+                if time.perf_counter() - next_send > interval:
+                    next_send = time.perf_counter() + interval
+
+                sleep_time = next_send - time.perf_counter()
+                if sleep_time > 0:
+                    time.sleep(sleep_time * 0.9)
+            else:
+                time.sleep(0.001)
+
+    # ------------------------------------------------------------------
+    # Called from main thread (stdin reader)
+    # ------------------------------------------------------------------
+
+    def update(self, cmd, h, m, s, f, tc_type):
+        with self._lock:
+            was_playing = self._playing
+
+            if cmd == "play":
+                if not was_playing:
+                    # Transition: stopped → playing
+                    self._tc = [h, m, s, f]
+                    self._tc_type = tc_type
+                    self._qf_piece = 0
+                    self._pending_sync = None
+                    self._send_full_frame(h, m, s, f, tc_type)
+                    self._playing = True
+                else:
+                    # Already playing: queue a position sync for next cycle boundary
+                    self._pending_sync = (h, m, s, f, tc_type)
+
+            elif cmd == "stop":
+                if was_playing:
+                    # Transition: playing → stopped
+                    self._playing = False
+                    self._tc = [h, m, s, f]
+                    self._tc_type = tc_type
+                    self._send_full_frame(h, m, s, f, tc_type)
+                else:
+                    # Scrubbing while stopped: send full-frame only if position changed
+                    if [h, m, s, f] != self._tc or tc_type != self._tc_type:
+                        self._tc = [h, m, s, f]
+                        self._tc_type = tc_type
+                        self._send_full_frame(h, m, s, f, tc_type)
+
+    def close(self):
+        self._running = False
+        self._thread.join(timeout=2.0)
+        self._midi_out.close_port()
+        del self._midi_out
+
+
+def main():
+    if "--list-ports" in sys.argv:
+        list_ports()
+        return
+
+    if not RTMIDI_AVAILABLE:
+        print("ERROR: python-rtmidi not installed. Run: pip3 install python-rtmidi",
+              file=sys.stderr)
+        sys.exit(1)
+
+    port_name = None
+    for arg in sys.argv[1:]:
+        if not arg.startswith("--"):
+            port_name = arg
+            break
+
+    try:
+        daemon = MTCDaemon(port_name)
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) < 6:
+                continue
+            cmd = parts[0]
+            try:
+                h = int(parts[1])
+                m = int(parts[2])
+                s = int(parts[3])
+                f = int(parts[4])
+                tc_type = int(parts[5])
+                daemon.update(cmd, h, m, s, f, tc_type)
+            except (ValueError, IndexError):
+                pass
+    except (EOFError, KeyboardInterrupt):
+        pass
+    finally:
+        daemon.close()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,57 @@
+name: Release on Version Tag
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'  # Semantic versioning: v1.0.0, v1.0.0-beta, etc.
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+      
+      - name: Build package
+        run: |
+          python3 setup.py
+          make build
+      
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          echo "version=${VERSION#v}" >> $GITHUB_OUTPUT
+      
+      - name: Generate release notes from CHANGELOG
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Extract version-specific notes from CHANGELOG.md
+          # Extracts from the version header to the next version header
+          awk "/^## \[$VERSION\]/,/^## \[/" CHANGELOG.md | head -n -1 | tail -n +2 > release_notes.md
+          
+          # If nothing found or file is too small, use generic notes
+          if [ ! -s release_notes.md ] || [ $(wc -l < release_notes.md) -lt 2 ]; then
+            echo "Release $VERSION - See CHANGELOG.md for details" > release_notes.md
+          fi
+      
+      - name: Create zip artifact
+        run: |
+          cd dist
+          zip -r "../ReaTC-${{ steps.version.outputs.version }}.zip" .
+          ls -lh "../ReaTC-${{ steps.version.outputs.version }}.zip"
+      
+      - name: Upload release with artifacts
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ReaTC-${{ steps.version.outputs.version }}.zip
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref, '-') }}  # true if beta/alpha/rc tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
