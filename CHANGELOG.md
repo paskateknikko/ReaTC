@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-02-22
+
+### Added
+
+- Repo-root `index.xml` for ReaPack repository discovery
+- gh-pages publishing of built ReaPack files from GitHub Actions
+
+### Changed
+
+- ReaPack install URL updated to `https://raw.githubusercontent.com/paskateknikko/ReaTC/main/index.xml`
+- ReaPack source file URLs now point to `gh-pages` for stable hosting
+
 ## [0.0.2] - 2026-02-22
 
 ### Added
