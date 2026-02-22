@@ -145,9 +145,9 @@ def generate_index_xml(version):
         <link rel="website">https://github.com/paskateknikko/ReaTC</link>
         <link rel="donation">https://github.com/paskateknikko/ReaTC</link>
       </metadata>
-          <version name="{version}" author="Tuukka Aimasmäki" time="{timestamp}">
+      <version name="{version}" author="Tuukka Aimasmäki" time="{timestamp}">
         <changelog><![CDATA[{changelog}]]></changelog>
-        <source file="Scripts/ReaTC/ReaTC.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/ReaTC.lua</source>
+        <source main="main" file="Scripts/ReaTC/ReaTC.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/ReaTC.lua</source>
         <source file="Scripts/ReaTC/reatc_core.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_core.lua</source>
         <source file="Scripts/ReaTC/reatc_ltc.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_ltc.lua</source>
         <source file="Scripts/ReaTC/reatc_outputs.lua">https://github.com/paskateknikko/ReaTC/raw/gh-pages/Scripts/ReaTC/reatc_outputs.lua</source>
