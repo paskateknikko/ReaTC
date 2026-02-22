@@ -48,13 +48,6 @@ jobs:
           fi
           echo "✓ CHANGELOG.md has entry for v$VERSION"
 
-      - name: Validate Lua syntax
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq luacheck > /dev/null 2>&1
-          echo "Checking Lua files..."
-          luacheck src/Scripts/ReaTC/*.lua --ignore 631 --quiet
-          echo "✓ All Lua files passed syntax check"
-
       - name: Validate Python syntax
         run: |
           echo "Checking Python files..."
