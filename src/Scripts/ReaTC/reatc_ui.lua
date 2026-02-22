@@ -285,10 +285,15 @@ return function(core, outputs, ltc)
   function M.draw_ui()
     local visible, open = ImGui.Begin(ctx, 'ReaTC v' .. core.VERSION, true)
     if visible then
-      if s.show_settings then
-        draw_settings()
-      else
-        draw_main()
+      local success, err = pcall(function()
+        if s.show_settings then
+          draw_settings()
+        else
+          draw_main()
+        end
+      end)
+      if not success then
+        ImGui.TextColored(ctx, 0xFF0000FF, "Error: " .. tostring(err))
       end
     end
     ImGui.End(ctx)
