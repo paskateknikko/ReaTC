@@ -9,8 +9,12 @@
 --   ReaTC/reatc_ltc.lua
 --   ReaTC/reatc_outputs.lua
 --   ReaTC/reatc_ui.lua
+--   ReaTC/reatc_bake.lua
+--   ReaTC/reatc_artnet.py
 --   ReaTC/reatc_udp.py
 --   ReaTC/reatc_mtc.py
+--   ReaTC/reatc_osc.py
+--   ReaTC/reatc_ltcgen.py
 --   [effect] ../Effects/ReaTC/reatc_ltc.jsfx
 -- @about
 --   # ReaTC
@@ -58,7 +62,8 @@ end
 local core    = dofile(script_path .. "reatc_core.lua")
 local ltc     = dofile(script_path .. "reatc_ltc.lua")(core)
 local outputs = dofile(script_path .. "reatc_outputs.lua")(core)
-local ui      = dofile(script_path .. "reatc_ui.lua")(core, outputs, ltc)
+local bake    = dofile(script_path .. "reatc_bake.lua")(core)
+local ui      = dofile(script_path .. "reatc_ui.lua")(core, outputs, ltc, bake)
 
 local state = core.state
 
@@ -102,6 +107,7 @@ local function loop()
     ltc.destroy_accessor()
     outputs.stop_mtc_daemon()
     outputs.stop_artnet_daemon()
+    outputs.stop_osc_daemon()
     core.save_settings()
     return  -- do NOT defer again
   end
@@ -118,6 +124,7 @@ local function loop()
   end
 
   outputs.send_artnet()
+  outputs.send_osc()
   outputs.send_mtc()
 
   reaper.defer(loop)

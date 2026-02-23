@@ -277,8 +277,12 @@ def generate_index_xml(version):
         <source file="Scripts/ReaTC/reatc_ltc.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_ltc.lua</source>
         <source file="Scripts/ReaTC/reatc_outputs.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_outputs.lua</source>
         <source file="Scripts/ReaTC/reatc_ui.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_ui.lua</source>
+        <source file="Scripts/ReaTC/reatc_bake.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_bake.lua</source>
+        <source file="Scripts/ReaTC/reatc_ltcgen.py">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_ltcgen.py</source>
+        <source file="Scripts/ReaTC/reatc_artnet.py">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_artnet.py</source>
         <source file="Scripts/ReaTC/reatc_udp.py">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_udp.py</source>
         <source file="Scripts/ReaTC/reatc_mtc.py">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_mtc.py</source>
+        <source file="Scripts/ReaTC/reatc_osc.py">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_osc.py</source>
       </version>
     </reapack>
     <reapack name="reatc_ltc.jsfx" type="effect" desc="LTC Decoder / Generator">
