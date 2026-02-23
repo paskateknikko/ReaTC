@@ -41,8 +41,12 @@ jobs:
             "dist/Scripts/ReaTC/reatc_ltc.lua"
             "dist/Scripts/ReaTC/reatc_outputs.lua"
             "dist/Scripts/ReaTC/reatc_ui.lua"
+            "dist/Scripts/ReaTC/reatc_bake.lua"
             "dist/Scripts/ReaTC/reatc_udp.py"
             "dist/Scripts/ReaTC/reatc_mtc.py"
+            "dist/Scripts/ReaTC/reatc_artnet.py"
+            "dist/Scripts/ReaTC/reatc_osc.py"
+            "dist/Scripts/ReaTC/reatc_ltcgen.py"
             "dist/Effects/ReaTC/reatc_ltc.jsfx"
           )
           for file in "${REQUIRED_FILES[@]}"; do
@@ -63,14 +67,14 @@ jobs:
         id: changelog
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          # Extract version-specific notes from CHANGELOG.md
-          # Extracts from the version header to the next version header
-          awk "/^## \[$VERSION\]/,/^## \[/" CHANGELOG.md | head -n -1 | tail -n +2 > release_notes.md
-          
-          # If nothing found or file is too small, use generic notes
-          if [ ! -s release_notes.md ] || [ $(wc -l < release_notes.md) -lt 2 ]; then
-            echo "Release $VERSION - See CHANGELOG.md for details" > release_notes.md
-          fi
+          python3 -c "
+import re, sys
+v = sys.argv[1]
+txt = open('CHANGELOG.md').read()
+m = re.search(r'(?m)^## \[' + re.escape(v) + r'\][^\n]*\n(.*?)(?=^## \[|\Z)', txt, re.DOTALL)
+body = m.group(1).strip() if m else ''
+print(body if body else f'Release {v} - See CHANGELOG.md for details')
+" "$VERSION" > release_notes.md
       
       - name: Create zip artifact
         run: |

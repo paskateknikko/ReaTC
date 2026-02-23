@@ -53,4 +53,7 @@ jobs:
           echo "Checking Python files..."
           python3 -m py_compile src/Scripts/ReaTC/reatc_udp.py
           python3 -m py_compile src/Scripts/ReaTC/reatc_mtc.py
+          python3 -m py_compile src/Scripts/ReaTC/reatc_artnet.py
+          python3 -m py_compile src/Scripts/ReaTC/reatc_osc.py
+          python3 -m py_compile src/Scripts/ReaTC/reatc_ltcgen.py
           echo "✓ All Python files passed syntax check"
