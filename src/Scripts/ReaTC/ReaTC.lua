@@ -101,6 +101,7 @@ local function loop()
     -- Window closed — clean up
     ltc.destroy_accessor()
     outputs.stop_mtc_daemon()
+    outputs.stop_artnet_daemon()
     core.save_settings()
     return  -- do NOT defer again
   end

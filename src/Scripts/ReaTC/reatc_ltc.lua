@@ -52,6 +52,13 @@ return function(core)
     local track = s.ltc_track
     if not track then return end
 
+    -- Validate track pointer (becomes stale if track deleted)
+    if not reaper.ValidatePtr(track, "MediaTrack*") then
+      s.ltc_track = nil
+      s.ltc_fx_idx = nil
+      return
+    end
+
     -- Lazily find or insert the JSFX
     if not s.ltc_fx_idx then
       s.ltc_fx_idx = ensure_jsfx(track)

@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.1.0] - 2026-02-23
+
+### Fixed
+
+- **Drop-frame TC incorrect at 10-minute boundaries**: formula was producing garbage TC (~23:59:59;28) and 2-frame glitches at 10:00, 20:00, etc. — fixed with `max(0, floor((mm - 2) / 1798))` guard in both Lua and EEL2
+- **LTC re-encoding not active in LTC Input mode**: encoder only ran in Transport mode, leaving mode 1 with no output — now re-clocks decoded LTC in both modes  
+- **Negative play_position not clamped**: REAPER allows cursor positions before project start, causing garbage TC — added `max(0, pos)` clamp in both `tc_from_pos_*` functions
+- **Sample rate changes mid-session not detected**: decoder/encoder cached timing constants from init only; audio device switch left thresholds and rates stale — added runtime detection in `@block`
+- **Peak decay applied per-block not per-sample**: exponent used `samplesblock / srate` instead of `1.0 / srate`, zeroing peak instantly — fixed exponential decay calculation
+- **Stale MediaTrack pointer after deletion**: Lua cached track handle without validation; deleted track became dangling — added `reaper.ValidatePtr()` check
+- **slider_automate(slider10) automating wrong slider**: passed value (0/1) instead of bitmask — fixed with `slider_automate(1<<9)` for slider10
+- **Art-Net spawning Python ~30 times/second**: each packet spawned new process (fork+exec overhead) — converted to persistent daemon (socket reuse)
+- **LTC track lost on reorder/add/delete**: stored 0-based index which changed silently — now persists track GUID, resolvable even after project restructuring
+- **UI frozen during pip install**: `os.execute()` blocked script — made async with `start` (Windows) or `&` (Unix)
+- **Redundant frame rebuild in @slider**: `build_enc_frame()` called but frame was stale (rebuilt immediately in @block) — removed call
+- **dec_seq incremented every @block wastefully**: 512-sample blocks (94/sec) vs TC frames (24–30/sec) = 60–70% redundant Lua reads — now only increments on TC change
+- **No IP address validation**: malformed IPs passed to Python silently failed — added `is_valid_ipv4()` with octet range checks
+
+### Improved
+
+- **NDF framerate calculation**: changed from `fps` (float) to `int_fps` for clearer intent in non-drop-frame path
+- **Thread-safety documentation**: added comment explaining benign race between @sample/@block (audio) and @gfx (GUI) threads — momentary stale display only
+- **IP configuration error feedback**: now validates on save/load and shows error message for malformed addresses
+- **Art-Net daemon startup**: daemon only created on first packet send (lazy init), restarted if IP address changes
+
+### New Files
+
+- **reatc_artnet.py**: persistent Art-Net TimeCode daemon (replaces per-packet reatc_udp.py for this function)
+
+### Technical Notes
+
+- JSFX LTC encoder now always active (both Transport and LTC Input modes)
+- Track persistence via GUID + fallback: script resolves GUID each session; if GUID not found, no automatic fallback to index (explicit re-selection required)
+- Art-Net daemon restarts on IP change to apply new destination
+
+
 ## [1.0.1] - 2026-02-23
 
 ### Added
