@@ -6,7 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [1.0.0-pre3] - 2026-02-22
+## [1.0.1] - 2026-02-23
+
+### Added
+
+- **LTC rate detection**: automatically detects incoming LTC frame rate (24/25/29.97DF/30) using a 2-second observation window with frame count guard (≥10 frames)
+- **Rate mismatch warning**: orange warning in status row when detected LTC rate differs from configured rate
+- **LTC detected indicator**: "LTC DETECTED" label shown in Transport mode when LTC signal is present on input
+- **gmem shared memory**: JSFX ↔ Lua communication via named `ReaTC_LTC` namespace for script-alive signalling
+
+### Fixed
+
+- **Transport mode TC not reaching Lua**: `dec_seq` was never incremented in Transport mode, so the Lua bridge never detected new timecode — now increments each `@block`
+- **Transport TC stuck at 00:00:00:00**: replaced invalid `transport_pos`/`transport_playing` with correct JSFX built-ins `play_position`/`play_state`
+- **play_state overwrite**: local assignment clobbered the JSFX built-in variable — renamed local to `is_playing`
+- **OFFLINE/RUNNING badge always wrong**: `gmem_attach("ReaTC_LTC")` was never called in JSFX or Lua, and Lua never wrote to gmem[8] — fixed both sides
+- **Rate detection false positive**: mismatch warning no longer fires on startup before enough frames are observed
+
+### Changed
+
+- Increased all JSFX UI font sizes by 1–2 pt for better readability
+- Brightened dim/hint text colors (0.45–0.55 → 0.62–0.70 range)
+- Removed threshold slider from JSFX UI (still controllable via Lua/REAPER slider panel)
+- Mode button now spans full panel width with centered label
+- Mode description text centered above mode button
+- Drop-frame timecode uses semicolon separator (`;`) per SMPTE convention
+- Background color tint varies by mode (cool blue-black for Transport, warm dark for LTC Input)
+
+## [1.0.0] - 2026-02-22
 
 ### Changed
 
