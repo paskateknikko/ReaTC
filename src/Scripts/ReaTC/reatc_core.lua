@@ -184,7 +184,7 @@ function M.is_valid_ipv4(ip)
   local octets = {}
   for octet in ip:gmatch("([^%.]+)") do
     local n = tonumber(octet)
-    if not n or n < 0 or n > 255 or octet ~= tostring(n) then
+    if not n or n < 0 or n > 255 or not octet:match("^%d+$") then
       return false
     end
     octets[#octets + 1] = n
