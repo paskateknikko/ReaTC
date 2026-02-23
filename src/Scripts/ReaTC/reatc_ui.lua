@@ -2,7 +2,7 @@
 -- @noindex
 -- @version {{VERSION}}
 
-return function(core, outputs, ltc)
+return function(core, outputs, ltc, bake)
   local M = {}
   local s = core.state
 
@@ -338,6 +338,16 @@ return function(core, outputs, ltc)
           string.format("JSFX active (FX slot %d)", s.ltc_fx_idx + 1))
       end
     end
+
+    -- ── Tools ────────────────────────────────────────────────────────────────
+    ImGui.SeparatorText(ctx, 'Tools')
+
+    if ImGui.Button(ctx, 'Bake LTC from Regions...') then
+      ImGui.CloseCurrentPopup(ctx)
+      bake.bake_regions()
+    end
+    ImGui.SameLine(ctx)
+    ImGui.TextColored(ctx, C.dim, "Create LTC audio items for all project regions")
 
     ImGui.Spacing(ctx)
     ImGui.TextColored(ctx, C.dim, "v" .. core.VERSION)
