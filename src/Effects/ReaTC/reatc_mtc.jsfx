@@ -1,0 +1,318 @@
+desc:ReaTC MTC Generator
+author:ReaTC
+version:{{VERSION}}
+
+// MIDI Timecode quarter-frame generator. No audio I/O — MIDI only.
+//
+// Reads play state and framerate from gmem (written by reatc_mtc.lua) and
+// emits sample-accurate MIDI quarter-frame messages every 1/(fps*4) samples.
+// Also fires a MTC full-frame SysEx locate message on demand.
+//
+// gmem layout (appends to "ReaTC_LTC" namespace, indices 10-16):
+//   [10] MTC_PLAY_STATE   Script -> JSFX   0=stop 1=play
+//   [11] MTC_FRAMERATE    Script -> JSFX   0=24 1=25 2=29.97DF 3=30
+//   [12] MTC_SEND_FF      Script -> JSFX   1=send full-frame SysEx this @block
+//   [13] MTC_FF_H         Script -> JSFX   full-frame target hours
+//   [14] MTC_FF_M         Script -> JSFX   full-frame target minutes
+//   [15] MTC_FF_S         Script -> JSFX   full-frame target seconds
+//   [16] MTC_FF_F         Script -> JSFX   full-frame target frames
+//
+// Uses REAPER's built-in play_position variable for sample-accurate TC sync.
+// No sliders — all configuration is via gmem from reatc_mtc.lua.
+
+in_pin:none
+out_pin:none
+
+
+@init
+
+// gmem indices — shared with reatc_ltc.jsfx and Lua via "ReaTC_LTC" namespace
+MTC_PLAY_STATE = 10;
+MTC_FRAMERATE  = 11;
+MTC_SEND_FF    = 12;
+MTC_FF_H       = 13;
+MTC_FF_M       = 14;
+MTC_FF_S       = 15;
+MTC_FF_F       = 16;
+
+// Extend gmem slot declaration to cover MTC indices
+gmem_slots = 17;
+
+// Local memory layout: 10-byte buffer for full-frame SysEx (mem[0..9])
+FF_BUF = 0;
+
+// QF generator state (global — accessed by helper functions and @gfx)
+qf_tc_h = 0; qf_tc_m = 0; qf_tc_s = 0; qf_tc_f = 0;
+qf_piece            = 0;    // which QF piece to send next (0–7)
+qf_samples_to_next  = 0.0;  // sample countdown to the next QF message
+qf_playing          = 0;    // was playing last block (for transition detection)
+qf_fps_t            = 1;    // framerate type used by helpers (set from gmem in @block)
+
+// gfx state
+gfx_alive_first = 1;  // skip first comparison to avoid false positive
+
+
+// -----------------------------------------------------------------
+// make_qf_byte(piece) → data byte for 0xF1 message
+//
+// Encodes one nibble of the TC value per MTC spec:
+//   piece 0: low nibble of frames
+//   piece 1: high nibble of frames (1 bit)
+//   piece 2: low nibble of seconds
+//   piece 3: high nibble of seconds (2 bits)
+//   piece 4: low nibble of minutes
+//   piece 5: high nibble of minutes (2 bits)
+//   piece 6: low nibble of hours
+//   piece 7: type bits (2) + high bit of hours (1)
+// -----------------------------------------------------------------
+function make_qf_byte(piece) local(h, m, s, f, type_bits, nibble) (
+  h = qf_tc_h; m = qf_tc_m; s = qf_tc_s; f = qf_tc_f;
+  type_bits = qf_fps_t & 0x03;
+  nibble = (piece == 0) ? (f & 0x0F) :
+           (piece == 1) ? ((f >> 4) & 0x01) :
+           (piece == 2) ? (s & 0x0F) :
+           (piece == 3) ? ((s >> 4) & 0x03) :
+           (piece == 4) ? (m & 0x0F) :
+           (piece == 5) ? ((m >> 4) & 0x03) :
+           (piece == 6) ? (h & 0x0F) :
+                          ((type_bits << 1) | ((h >> 4) & 0x01));
+  (piece << 4) | nibble;
+);
+
+
+// -----------------------------------------------------------------
+// advance_tc_frame(): increment qf_tc_{h,m,s,f} by one frame.
+// Handles 29.97 DF: skip frames 0 and 1 at minutes not divisible by 10.
+// Uses global qf_fps_t.
+// -----------------------------------------------------------------
+function advance_tc_frame() local(fps_int) (
+  fps_int = (qf_fps_t == 0) ? 24 : (qf_fps_t == 1) ? 25 : 30;
+  qf_tc_f += 1;
+  qf_tc_f >= fps_int ? (
+    qf_tc_f = 0;
+    qf_tc_s += 1;
+    qf_tc_s >= 60 ? (
+      qf_tc_s = 0;
+      qf_tc_m += 1;
+      qf_tc_m >= 60 ? (
+        qf_tc_m = 0;
+        qf_tc_h = (qf_tc_h + 1) % 24;
+      );
+      // Drop-frame: skip frames 0 and 1 at non-10-minute boundaries
+      qf_fps_t == 2 && (qf_tc_m % 10) != 0 ? (
+        qf_tc_f = 2;
+      );
+    );
+  );
+);
+
+
+// -----------------------------------------------------------------
+// tc_from_seconds_mtc(pos): set qf_tc_{h,m,s,f} from position in seconds.
+// Mirrors tc_from_pos_ndf / tc_from_pos_df from reatc_ltc.jsfx.
+// Uses global qf_fps_t.
+// -----------------------------------------------------------------
+function tc_from_seconds_mtc(pos) local(total, ts, fps_int, d, mm, tf) (
+  pos = max(0, pos);
+  fps_int = (qf_fps_t == 0) ? 24 : (qf_fps_t == 1) ? 25 : 30;
+  qf_fps_t == 2 ? (
+    // 29.97 drop-frame (SMPTE algorithm)
+    total = floor(pos * 30.0);
+    d     = floor(total / 17982);
+    mm    = total % 17982;
+    tf    = total + 18*d + 2*max(0, floor((mm - 2) / 1798));
+    qf_tc_h = floor(tf / 108000) % 24;
+    qf_tc_m = floor(tf / 1800)   % 60;
+    qf_tc_s = floor(tf / 30)     % 60;
+    qf_tc_f = tf % 30;
+  ) : (
+    // Non-drop-frame
+    total   = floor(pos * fps_int);
+    qf_tc_f = total % fps_int;
+    ts      = floor(total / fps_int);
+    qf_tc_s = ts % 60;
+    ts      = floor(ts / 60);
+    qf_tc_m = ts % 60;
+    qf_tc_h = floor(ts / 60) % 24;
+  );
+);
+
+
+// -----------------------------------------------------------------
+// tc_to_seconds_mtc(): convert current qf_tc_{h,m,s,f} back to seconds.
+// Used for drift detection. Uses global qf_fps_t.
+// -----------------------------------------------------------------
+function tc_to_seconds_mtc() local(fps_real, fps_int, total, mins_total) (
+  fps_real = (qf_fps_t == 0) ? 24 : (qf_fps_t == 1) ? 25 : (qf_fps_t == 2) ? 29.97 : 30;
+  fps_int  = (qf_fps_t == 0) ? 24 : (qf_fps_t == 1) ? 25 : 30;
+  qf_fps_t == 2 ? (
+    // Drop-frame inverse: subtract dropped frames to get real-time position
+    mins_total = qf_tc_h * 60 + qf_tc_m;
+    total = qf_tc_h * 108000 + qf_tc_m * 1800 + qf_tc_s * 30 + qf_tc_f;
+    total -= 2 * (mins_total - floor(mins_total / 10));
+    total / 29.97;
+  ) : (
+    total = (qf_tc_h * 3600 + qf_tc_m * 60 + qf_tc_s) * fps_int + qf_tc_f;
+    total / fps_real;
+  );
+);
+
+
+// -----------------------------------------------------------------
+// build_ff_sysex(): fill mem[FF_BUF..FF_BUF+9] with MTC full-frame SysEx.
+// Byte layout: F0 7F 7F 01 01 [type<<5|H] [M] [S] [F] F7
+// Reads gmem[MTC_FRAMERATE] and gmem[MTC_FF_{H,M,S,F}].
+// -----------------------------------------------------------------
+function build_ff_sysex() local(type_bits, hours_byte) (
+  type_bits  = floor(gmem[MTC_FRAMERATE]) & 0x03;
+  hours_byte = (type_bits << 5) | (floor(gmem[MTC_FF_H]) & 0x1F);
+  mem[FF_BUF+0] = 0xF0;
+  mem[FF_BUF+1] = 0x7F;
+  mem[FF_BUF+2] = 0x7F;
+  mem[FF_BUF+3] = 0x01;
+  mem[FF_BUF+4] = 0x01;
+  mem[FF_BUF+5] = hours_byte;
+  mem[FF_BUF+6] = floor(gmem[MTC_FF_M]) & 0x3F;
+  mem[FF_BUF+7] = floor(gmem[MTC_FF_S]) & 0x3F;
+  mem[FF_BUF+8] = floor(gmem[MTC_FF_F]) & 0x1F;
+  mem[FF_BUF+9] = 0xF7;
+);
+
+
+@block
+
+// ── 1. Read gmem ──────────────────────────────────────────────────────────────
+new_play  = gmem[MTC_PLAY_STATE] > 0.5 ? 1 : 0;
+qf_fps_t  = floor(gmem[MTC_FRAMERATE]);
+fps_real  = (qf_fps_t == 0) ? 24 : (qf_fps_t == 1) ? 25 : (qf_fps_t == 2) ? 29.97 : 30;
+qf_interval = srate / (fps_real * 4.0);  // samples between QF messages
+
+// ── 2. Full-frame SysEx (fires at sample offset 0 when requested) ─────────────
+gmem[MTC_SEND_FF] > 0.5 ? (
+  build_ff_sysex();
+  midisendsysex(0, FF_BUF, 10);
+  gmem[MTC_SEND_FF] = 0;
+);
+
+// ── 3. Stopped → playing transition: resync QF position from play_position ────
+new_play && !qf_playing ? (
+  tc_from_seconds_mtc(play_position);
+  qf_piece = 0;
+  qf_samples_to_next = 0;
+);
+qf_playing = new_play;
+
+// ── 4. QF message loop ────────────────────────────────────────────────────────
+// Runs only when playing. The loop limit (32) is well above the maximum number
+// of QF messages that can fit in any practical audio buffer (1–3 at normal
+// buffer sizes). When qf_samples_to_next exceeds samplesblock, the condition
+// fails and remaining iterations are no-ops.
+new_play ? (
+  loop(32,
+    qf_samples_to_next <= samplesblock ? (
+      midisend(max(0, min(samplesblock - 1, floor(qf_samples_to_next))),
+               0xF1, make_qf_byte(qf_piece), 0);
+      qf_samples_to_next += qf_interval;
+      qf_piece += 1;
+      qf_piece >= 8 ? (
+        qf_piece = 0;
+        advance_tc_frame();
+      );
+    );
+  );
+
+  // Subtract block size so next block sees the carry-over offset
+  qf_samples_to_next -= samplesblock;
+  qf_samples_to_next < 0 ? qf_samples_to_next = 0;
+
+  // Drift correction: if play_position diverges by more than 2 frames, resync.
+  // This handles timeline scrubbing while playing without runaway drift.
+  mtc_expected = tc_to_seconds_mtc();
+  abs(play_position - mtc_expected) > (2.0 / fps_real) ? (
+    tc_from_seconds_mtc(play_position);
+    qf_piece = 0;
+    qf_samples_to_next = 0;
+  );
+);
+
+
+@gfx 440 160
+
+// NOTE: @gfx runs on the GUI thread. Reading qf_tc_* / qf_piece here is a
+// benign race with the audio thread — may see momentarily stale values.
+
+// Background
+gfx_r=0.08; gfx_g=0.08; gfx_b=0.12; gfx_a=1;
+gfx_rect(0, 0, gfx_w, gfx_h, 1);
+
+// Panel
+pad = 12;
+panel_x = pad; panel_y = pad;
+panel_w = gfx_w - pad*2;
+panel_h = gfx_h - pad*2;
+
+gfx_r=0.11; gfx_g=0.12; gfx_b=0.16; gfx_a=1;
+gfx_rect(panel_x, panel_y, panel_w, panel_h, 1);
+gfx_r=0.22; gfx_g=0.24; gfx_b=0.32;
+gfx_rect(panel_x, panel_y,             panel_w,  1, 1);
+gfx_rect(panel_x, panel_y+panel_h-1,   panel_w,  1, 1);
+gfx_rect(panel_x, panel_y,             1,         panel_h, 1);
+gfx_rect(panel_x+panel_w-1, panel_y,   1,         panel_h, 1);
+
+// Header label
+gfx_setfont(1, "Arial", 12, 'b');
+gfx_r=0.65; gfx_g=0.68; gfx_b=0.78;
+gfx_x = panel_x + 12; gfx_y = panel_y + 8;
+gfx_drawstr("MTC GENERATOR");
+
+// Status badge (PLAYING / STOPPED)
+badge_w = 76; badge_h = 20;
+badge_x = panel_x + panel_w - badge_w - 10;
+badge_y = panel_y + 7;
+gmem[MTC_PLAY_STATE] > 0.5 ? (
+  gfx_r=0.14; gfx_g=0.52; gfx_b=0.30;
+) : (
+  gfx_r=0.50; gfx_g=0.25; gfx_b=0.25;
+);
+gfx_rect(badge_x, badge_y, badge_w, badge_h, 1);
+gfx_setfont(1, "Arial", 10, 'b');
+gfx_r=1; gfx_g=1; gfx_b=1;
+strcpy(#badge_str, gmem[MTC_PLAY_STATE] > 0.5 ? "PLAYING" : "STOPPED");
+gfx_measurestr(#badge_str, bw, bh);
+gfx_x = badge_x + (badge_w - bw) / 2;
+gfx_y = badge_y + (badge_h - bh) / 2;
+gfx_drawstr(#badge_str);
+
+// TC display — drop-frame uses semicolon separator per SMPTE convention
+gfx_fps_t = floor(gmem[MTC_FRAMERATE]);
+gfx_fps_t == 2 ? (
+  sprintf(#tc_str, "%02d:%02d:%02d;%02d", qf_tc_h, qf_tc_m, qf_tc_s, qf_tc_f);
+) : (
+  sprintf(#tc_str, "%02d:%02d:%02d:%02d", qf_tc_h, qf_tc_m, qf_tc_s, qf_tc_f);
+);
+
+gmem[MTC_PLAY_STATE] > 0.5 ? (
+  gfx_r=0.20; gfx_g=0.88; gfx_b=0.38;  // Green when playing
+) : (
+  gfx_r=0.88; gfx_g=0.20; gfx_b=0.20;  // Red when stopped
+);
+
+gfx_setfont(1, "Courier New", 36, 'b');
+gfx_measurestr(#tc_str, tcw, tch);
+tc_y_center = panel_y + 30 + (panel_h - 30 - 26 - tch) / 2;
+gfx_x = panel_x + (panel_w - tcw) / 2;
+gfx_y = tc_y_center > panel_y + 32 ? tc_y_center : panel_y + 32;
+gfx_drawstr(#tc_str);
+
+// Status line: fps + QF piece counter
+gfx_fps_t == 0 ? strcpy(#fps_str, "24fps") :
+gfx_fps_t == 1 ? strcpy(#fps_str, "25fps") :
+gfx_fps_t == 2 ? strcpy(#fps_str, "29.97DF") :
+                 strcpy(#fps_str, "30fps");
+
+sprintf(#status_str, "%s  |  QF piece %d/7", #fps_str, qf_piece);
+gfx_setfont(1, "Arial", 11, 0);
+gfx_r=0.65; gfx_g=0.68; gfx_b=0.78;
+gfx_x = panel_x + 12;
+gfx_y = panel_y + panel_h - 20;
+gfx_drawstr(#status_str);

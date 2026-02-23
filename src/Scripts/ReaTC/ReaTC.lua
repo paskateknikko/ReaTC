@@ -7,6 +7,7 @@
 --   [main] ReaTC.lua
 --   ReaTC/reatc_core.lua
 --   ReaTC/reatc_ltc.lua
+--   ReaTC/reatc_mtc.lua
 --   ReaTC/reatc_outputs.lua
 --   ReaTC/reatc_ui.lua
 --   ReaTC/reatc_bake.lua
@@ -16,6 +17,7 @@
 --   ReaTC/reatc_osc.py
 --   ReaTC/reatc_ltcgen.py
 --   [effect] ../Effects/ReaTC/reatc_ltc.jsfx
+--   [effect] ../Effects/ReaTC/reatc_mtc.jsfx
 -- @about
 --   # ReaTC
 --
@@ -34,7 +36,6 @@
 --   - REAPER 6.0+
 --   - **ReaImGui** (installed automatically via ReaPack dependency)
 --   - Python 3 (pre-installed on macOS; Windows Store / python.org on Windows)
---   - `python-rtmidi` (optional, for MTC — auto-installed on first use)
 --
 --   ## Links
 --   - [GitHub](https://github.com/paskateknikko/ReaTC)
@@ -61,9 +62,10 @@ end
 
 local core    = dofile(script_path .. "reatc_core.lua")
 local ltc     = dofile(script_path .. "reatc_ltc.lua")(core)
+local mtc     = dofile(script_path .. "reatc_mtc.lua")(core)
 local outputs = dofile(script_path .. "reatc_outputs.lua")(core)
 local bake    = dofile(script_path .. "reatc_bake.lua")(core)
-local ui      = dofile(script_path .. "reatc_ui.lua")(core, outputs, ltc, bake)
+local ui      = dofile(script_path .. "reatc_ui.lua")(core, outputs, ltc, bake, mtc)
 
 local state = core.state
 
@@ -88,14 +90,7 @@ local function init()
   end
 
   if state.mtc_enabled then
-    if core.check_rtmidi() then
-      state.mtc_ports = core.list_midi_ports()
-      outputs.start_mtc_daemon()
-    else
-      state.mtc_enabled = false
-      state.mtc_error   = "python-rtmidi missing — re-enable MTC to install"
-      core.save_settings()
-    end
+    mtc.ensure_track()
   end
 
   ui.init()
@@ -105,7 +100,7 @@ local function loop()
   if not ui.draw_ui() then
     -- Window closed — clean up
     ltc.destroy_accessor()
-    outputs.stop_mtc_daemon()
+    mtc.on_disable()
     outputs.stop_artnet_daemon()
     outputs.stop_osc_daemon()
     core.save_settings()
@@ -126,9 +121,9 @@ local function loop()
     state.tc_valid = false
   end
 
+  mtc.update()
   outputs.send_artnet()
   outputs.send_osc()
-  outputs.send_mtc()
 
   reaper.defer(loop)
 end

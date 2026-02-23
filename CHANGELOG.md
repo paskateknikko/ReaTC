@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.3.0] - 2026-02-23
+
+### Changed
+
+- **MTC output is now JSFX-native — no Python or `python-rtmidi` required** — replaced the `reatc_mtc.py` daemon with `reatc_mtc.jsfx`, a MIDI-only REAPER plugin that generates MIDI Timecode quarter-frame messages at sample-accurate offsets directly inside REAPER's audio engine. Timing precision goes from ±1–5 ms (Python `perf_counter` thread) to sub-sample (JSFX `midisend` offset), and the dependency on `python-rtmidi` is eliminated entirely.
+- **MTC port selection moved to REAPER's native I/O routing** — the port dropdown in the Settings panel is replaced by a "Select MTC Track" button that focuses the auto-created `ReaTC MTC` track; hardware port assignment is done via the track's standard I/O button, giving access to all REAPER-visible ports including virtual and aggregate devices.
+- **`ReaTC MTC` track auto-created on MTC enable** — the track is created once, persisted by GUID (survives track reorder/add/delete), and muted by default since it produces no audio.
+
+### Added
+
+- **`reatc_mtc.jsfx`** — new JSFX plugin: reads play state and framerate from `gmem[10-16]` (written by `reatc_mtc.lua`), emits `0xF1` quarter-frame messages at per-sample offsets via `midisend()`, sends MTC full-frame SysEx locate messages via `midisendsysex()` on play/stop transitions, and resyncs automatically if `play_position` drifts more than 2 frames. Supports all four frame rates including 29.97 drop-frame with the standard minute-skip rule.
+- **`reatc_mtc.lua`** — new Lua module that manages the `ReaTC MTC` track and JSFX lifecycle (mirrors `reatc_ltc.lua` structure); writes `gmem` slots each defer frame; triggers full-frame locate on every play-state or frame-rate change.
+- **gmem slots 10–16** — new `ReaTC_LTC` namespace indices shared between `reatc_mtc.lua` and `reatc_mtc.jsfx` for play state, framerate, full-frame trigger, and full-frame H/M/S/F values.
+
+### Deprecated
+
+- **`reatc_mtc.py`** — kept for this release cycle; will be removed in v1.4.0. The file now carries a deprecation notice in its header.
+
+### Removed
+
+- `M.check_rtmidi()`, `M.try_install_rtmidi()`, `M.list_midi_ports()` from `reatc_core.lua` — no longer needed.
+- `start_mtc_daemon()`, `stop_mtc_daemon()`, `send_mtc()` from `reatc_outputs.lua`.
+- `mtc_port`, `mtc_proc`, `mtc_ports`, `last_mtc_time` from the shared state table.
+- `python-rtmidi` install prompt and port-selection dropdown from the Settings UI.
+
+
 ## [1.2.0] - 2026-02-23
 
 ### Added

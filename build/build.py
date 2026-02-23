@@ -275,6 +275,7 @@ def generate_index_xml(version):
         <source main="main" file="Scripts/ReaTC/ReaTC.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/ReaTC.lua</source>
         <source file="Scripts/ReaTC/reatc_core.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_core.lua</source>
         <source file="Scripts/ReaTC/reatc_ltc.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_ltc.lua</source>
+        <source file="Scripts/ReaTC/reatc_mtc.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_mtc.lua</source>
         <source file="Scripts/ReaTC/reatc_outputs.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_outputs.lua</source>
         <source file="Scripts/ReaTC/reatc_ui.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_ui.lua</source>
         <source file="Scripts/ReaTC/reatc_bake.lua">https://github.com/paskateknikko/ReaTC/raw/reapack/Scripts/ReaTC/reatc_bake.lua</source>
@@ -288,6 +289,11 @@ def generate_index_xml(version):
     <reapack name="reatc_ltc.jsfx" type="effect" desc="LTC Decoder / Generator">
       <version name="{version}" author="Tuukka Aimasmäki" time="{timestamp}">
         <source main="main" file="Effects/ReaTC/reatc_ltc.jsfx">https://github.com/paskateknikko/ReaTC/raw/reapack/Effects/ReaTC/reatc_ltc.jsfx</source>
+      </version>
+    </reapack>
+    <reapack name="reatc_mtc.jsfx" type="effect" desc="MTC Quarter-Frame Generator">
+      <version name="{version}" author="Tuukka Aimasmäki" time="{timestamp}">
+        <source main="main" file="Effects/ReaTC/reatc_mtc.jsfx">https://github.com/paskateknikko/ReaTC/raw/reapack/Effects/ReaTC/reatc_mtc.jsfx</source>
       </version>
     </reapack>
   </category>

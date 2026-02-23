@@ -19,22 +19,22 @@
 
 __version__ = "{{VERSION}}"
 
-import sys
 import socket
 import struct
-import os
+import sys
 
 ARTNET_PORT = 6454
+
 
 def build_artnet_timecode(hours, mins, secs, frames, tc_type):
     """Build Art-Net TimeCode packet (19 bytes)"""
     packet = bytearray()
 
     # ID: "Art-Net\0" (8 bytes)
-    packet.extend(b'Art-Net\x00')
+    packet.extend(b"Art-Net\x00")
 
     # OpCode: 0x9700 (little-endian)
-    packet.extend(struct.pack('<H', 0x9700))
+    packet.extend(struct.pack("<H", 0x9700))
 
     # ProtVer: 0x000E (14)
     packet.append(0x00)  # ProtVerHi
@@ -52,6 +52,7 @@ def build_artnet_timecode(hours, mins, secs, frames, tc_type):
     packet.append(tc_type & 0xFF)
 
     return bytes(packet)
+
 
 def main():
     if len(sys.argv) < 2:
@@ -97,5 +98,6 @@ def main():
     finally:
         sock.close()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

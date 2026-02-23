@@ -37,7 +37,6 @@ do
 end
 
 M.py_artnet = M.script_path .. "reatc_artnet.py"
-M.py_mtc    = M.script_path .. "reatc_mtc.py"
 M.py_osc    = M.script_path .. "reatc_osc.py"
 
 M.is_win = reaper.GetOS():find("Win") ~= nil
@@ -59,12 +58,11 @@ M.state = {
   last_artnet_time = 0,
 
   -- MTC
-  mtc_enabled  = false,
-  mtc_port     = "",         -- "" = virtual port
-  mtc_proc     = nil,
-  mtc_error    = nil,
-  mtc_ports    = nil,        -- list of {name, index}
-  last_mtc_time = 0,
+  mtc_enabled      = false,
+  mtc_track_guid   = nil,    -- GUID of "ReaTC MTC" track (persists across reorder)
+  mtc_track        = nil,    -- MediaTrack handle
+  mtc_fx_idx       = nil,    -- FX chain index of reatc_mtc.jsfx
+  mtc_error        = nil,
 
   -- OSC
   osc_enabled   = false,
@@ -115,63 +113,6 @@ function M.find_python()
     end
   end
   return nil
-end
-
--- python-rtmidi install helper
-function M.check_rtmidi()
-  if not M.state.python_bin then return false end
-  local q = M.is_win and ('"' .. M.state.python_bin .. '"') or M.state.python_bin
-  local h = io.popen(q .. ' -c "import rtmidi; print(1)" 2>&1')
-  if not h then return false end
-  local r = h:read("*l"); h:close()
-  return r == "1"
-end
-
-function M.try_install_rtmidi()
-  local ret = reaper.ShowMessageBox(
-    "python-rtmidi is required for MTC output.\n\n" ..
-    "It is free and open-source (MIT license).\n" ..
-    "Install it now? (requires internet connection)\n\n" ..
-    "Installation will proceed in background (non-blocking).\n" ..
-    "Command: pip3 install python-rtmidi",
-    "Install dependency?", 4)  -- 4 = Yes/No buttons
-  if ret ~= 6 then return false end  -- 6 = Yes
-
-  local q = M.is_win and ('"' .. M.state.python_bin .. '"') or M.state.python_bin
-  local background_cmd = q .. ' -m pip install python-rtmidi'
-
-  -- Run async (non-blocking): on Windows with 'start', on Unix with '&'
-  if M.is_win then
-    os.execute('start "" ' .. background_cmd)
-  else
-    os.execute(background_cmd .. ' ' .. M.dev_null .. ' &')
-  end
-
-  -- Show info dialog (non-blocking)
-  reaper.ShowMessageBox(
-    "Installation started in background.\n\n" ..
-    "This may take a minute or two.\n" ..
-    "You can continue using REAPER normally.\n" ..
-    "Restart MTC output when ready.",
-    "Installing python-rtmidi", 0)
-
-  return false  -- Installation is async, so return false for now
-end
-
--- MIDI port listing
-function M.list_midi_ports()
-  if not M.state.python_bin then return {} end
-  local q   = M.is_win and ('"' .. M.state.python_bin .. '"') or M.state.python_bin
-  local cmd = q .. ' "' .. M.py_mtc .. '" --list-ports 2>&1'
-  local h   = io.popen(cmd)
-  if not h then return {} end
-  local out = h:read("*a"); h:close()
-  local ports = { { name = "Virtual Port (REAPER MTC Out)", index = -1 } }
-  for line in out:gmatch("[^\n]+") do
-    local idx, name = line:match("^(%d+): (.+)")
-    if idx then table.insert(ports, { name = name, index = tonumber(idx) }) end
-  end
-  return ports
 end
 
 -- Timecode source selection
@@ -263,10 +204,10 @@ function M.load_settings()
   local loaded_ip = gets("dest_ip")
   s.dest_ip = (loaded_ip and M.is_valid_ipv4(loaded_ip)) and loaded_ip or s.dest_ip
   s.framerate_type = tonumber(gets("framerate_type")) or s.framerate_type
-  s.artnet_enabled = gets("artnet_enabled") == "true"
-  s.mtc_enabled    = gets("mtc_enabled")    == "true"
-  s.mtc_port       = gets("mtc_port")       or ""
-  s.ltc_enabled    = gets("ltc_enabled")    == "true"
+  s.artnet_enabled  = gets("artnet_enabled") == "true"
+  s.mtc_enabled     = gets("mtc_enabled")   == "true"
+  s.mtc_track_guid  = gets("mtc_track_guid")
+  s.ltc_enabled     = gets("ltc_enabled")   == "true"
   s.ltc_track_guid = gets("ltc_track_guid")  -- GUID-based track persistence
   s.threshold_db   = tonumber(gets("threshold_db")) or -24
   s.ltc_fallback   = gets("ltc_fallback") ~= "false"  -- default true
@@ -275,9 +216,12 @@ function M.load_settings()
   s.osc_ip         = (loaded_osc_ip and M.is_valid_ipv4(loaded_osc_ip)) and loaded_osc_ip or s.osc_ip
   s.osc_port       = tonumber(gets("osc_port")) or 9000
   s.osc_address    = gets("osc_address") or "/tc"
-  -- Resolve GUID to track handle
+  -- Resolve GUIDs to track handles
   if s.ltc_track_guid then
     s.ltc_track = M.get_track_by_guid(s.ltc_track_guid)
+  end
+  if s.mtc_track_guid then
+    s.mtc_track = M.get_track_by_guid(s.mtc_track_guid)
   end
 end
 
@@ -286,10 +230,10 @@ function M.save_settings()
   local function sets(k, v) reaper.SetExtState(M.EXT_SECTION, k, tostring(v), true) end
   sets("dest_ip",        s.dest_ip)
   sets("framerate_type", s.framerate_type)
-  sets("artnet_enabled", s.artnet_enabled)
-  sets("mtc_enabled",    s.mtc_enabled)
-  sets("mtc_port",       s.mtc_port)
-  sets("ltc_enabled",    s.ltc_enabled)
+  sets("artnet_enabled",  s.artnet_enabled)
+  sets("mtc_enabled",     s.mtc_enabled)
+  sets("mtc_track_guid",  s.mtc_track_guid or "")
+  sets("ltc_enabled",     s.ltc_enabled)
   sets("ltc_track_guid", s.ltc_track_guid or "")
   sets("threshold_db",   s.threshold_db)
   sets("ltc_fallback",   s.ltc_fallback)

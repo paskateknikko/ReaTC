@@ -2,7 +2,7 @@
 -- @noindex
 -- @version {{VERSION}}
 
-return function(core, outputs, ltc, bake)
+return function(core, outputs, ltc, bake, mtc)
   local M = {}
   local s = core.state
 
@@ -192,56 +192,35 @@ return function(core, outputs, ltc, bake)
     -- ── MTC ──────────────────────────────────────────────────────────────────
     ImGui.SeparatorText(ctx, 'MTC Output')
 
-    local mtc_changed, mtc_val = ImGui.Checkbox(ctx, 'Enable MTC', s.mtc_enabled)
+    local mtc_changed, mtc_val = ImGui.Checkbox(ctx, 'Enable MTC##mtc', s.mtc_enabled)
     if mtc_changed then
-      if mtc_val then   -- turning on
-        if core.check_rtmidi() or core.try_install_rtmidi() then
-          s.mtc_enabled = true
-          s.mtc_error   = nil
-          if not s.mtc_ports then s.mtc_ports = core.list_midi_ports() end
-          outputs.start_mtc_daemon()
-        end
-      else              -- turning off
-        s.mtc_enabled = false
-        outputs.stop_mtc_daemon()
+      s.mtc_enabled = mtc_val
+      if mtc_val then
+        mtc.ensure_track()
+      else
+        mtc.on_disable()
         s.mtc_error = nil
       end
       core.save_settings()
     end
 
     if s.mtc_enabled then
-      local ports      = s.mtc_ports or {}
-      local port_names = {}
-      local cur_idx    = 0
-      for i, p in ipairs(ports) do
-        port_names[i] = (p.index == -1) and "Virtual Port" or p.name
-        if (s.mtc_port == "" and p.index == -1) or
-           (s.mtc_port ~= "" and p.name == s.mtc_port) then
-          cur_idx = i - 1   -- 0-based for ImGui.Combo
+      if s.mtc_track and reaper.ValidatePtr(s.mtc_track, "MediaTrack*") then
+        ImGui.TextColored(ctx, C.green, "Active — JSFX on track '" .. "ReaTC MTC" .. "'")
+        ImGui.TextColored(ctx, C.dim,
+          "Set MIDI output via the I/O button on the 'ReaTC MTC' track")
+        if ImGui.Button(ctx, "Select MTC Track##mtcsel") then
+          reaper.SetOnlyTrackSelected(s.mtc_track)
         end
+      else
+        ImGui.TextColored(ctx, C.orange, "MTC track not found — enable to auto-create")
       end
-      local port_items = table.concat(port_names, '\0') .. '\0'
-      ImGui.SetNextItemWidth(ctx, 280)
-      local port_changed, new_idx = ImGui.Combo(ctx, 'Port##mtc', cur_idx, port_items)
-      if port_changed then
-        local np = ports[new_idx + 1]
-        if np then
-          s.mtc_port = (np.index == -1) and "" or np.name
-          outputs.stop_mtc_daemon()
-          outputs.start_mtc_daemon()
-          core.save_settings()
-        end
-      end
+    else
+      ImGui.TextColored(ctx, C.dim, "Uses JSFX on 'ReaTC MTC' track — no Python required")
     end
 
     if s.mtc_error then
       ImGui.TextColored(ctx, C.red, "Error: " .. trunc(s.mtc_error, 60))
-    elseif s.mtc_enabled then
-      local pl = s.mtc_port ~= "" and s.mtc_port or "Virtual Port"
-      ImGui.TextColored(ctx, C.green, "Active — " .. pl)
-    else
-      ImGui.TextColored(ctx, C.dim,
-        "Requires python-rtmidi (auto-installed on enable)")
     end
 
     -- ── LTC Audio Input ───────────────────────────────────────────────────────
