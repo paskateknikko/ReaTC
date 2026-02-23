@@ -55,6 +55,28 @@ return function(core)
     end
   end
 
+  function M.start_artnet_daemon()
+    if s.artnet_proc then return true end
+    if not s.python_bin then
+      s.artnet_error = "Python not found"; return false
+    end
+    local q = core.is_win and ('"' .. s.python_bin .. '"') or s.python_bin
+    local cmd = q .. ' "' .. core.py_artnet .. '" "' .. s.dest_ip .. '" ' .. core.dev_null
+    s.artnet_proc = io.popen(cmd, "w")
+    if not s.artnet_proc then
+      s.artnet_error = "Failed to start Art-Net daemon"; return false
+    end
+    s.artnet_error = nil
+    return true
+  end
+
+  function M.stop_artnet_daemon()
+    if s.artnet_proc then
+      pcall(function() s.artnet_proc:close() end)
+      s.artnet_proc = nil
+    end
+  end
+
   function M.send_artnet()
     if not s.artnet_enabled or not s.python_bin then return end
     local play = (reaper.GetPlayState() & 1) == 1
@@ -63,25 +85,25 @@ return function(core)
     if now - s.last_artnet_time < 1 / 30 then return end
     s.last_artnet_time = now
 
+    -- Start daemon on first send
+    if not s.artnet_proc then
+      if not M.start_artnet_daemon() then return end
+    end
+
     local h, m, sec, f = core.get_active_tc()
     local t = s.framerate_type
 
-    local q   = core.is_win and ('"' .. s.python_bin .. '"') or s.python_bin
-    local cmd = string.format('%s "%s" %s %d %d %d %d %d 2>&1',
-      q, core.py_artnet, s.dest_ip, h, m, sec, f, t)
-
-    local handle = io.popen(cmd)
-    if handle then
-      local result = handle:read("*a")
-      local ok = handle:close()
-      if ok then
-        s.packets_sent = s.packets_sent + 1
-        s.artnet_error = nil
-      else
-        if result and result ~= "" then
-          s.artnet_error = result:match("^[^\n]+") or "send error"
-        end
-      end
+    local ok = pcall(function()
+      s.artnet_proc:write(string.format("%d %d %d %d %d\n", h, m, sec, f, t))
+      s.artnet_proc:flush()
+    end)
+    if not ok then
+      s.artnet_error = "Daemon write failed"
+      M.stop_artnet_daemon()
+      s.artnet_enabled = false
+    else
+      s.packets_sent = s.packets_sent + 1
+      s.artnet_error = nil
     end
   end
 

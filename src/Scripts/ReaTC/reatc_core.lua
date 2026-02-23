@@ -36,7 +36,7 @@ do
   M.script_path = info.source:match("@(.+[\\/])") or ""
 end
 
-M.py_artnet = M.script_path .. "reatc_udp.py"
+M.py_artnet = M.script_path .. "reatc_artnet.py"
 M.py_mtc    = M.script_path .. "reatc_mtc.py"
 
 M.is_win = reaper.GetOS():find("Win") ~= nil
@@ -50,6 +50,7 @@ M.state = {
 
   -- Art-Net
   artnet_enabled   = false,
+  artnet_proc      = nil,
   dest_ip          = "2.0.0.1",
   framerate_type   = M.FR_EBU,
   packets_sent     = 0,
@@ -66,7 +67,7 @@ M.state = {
 
   -- LTC decoder configuration
   ltc_enabled    = false,
-  ltc_track_idx  = nil,      -- 0-based track index or nil
+  ltc_track_guid = nil,      -- track GUID (persists across reorder/add/delete)
   ltc_track      = nil,      -- MediaTrack handle
   threshold_db   = -24,
   ltc_fallback   = true,     -- auto-fallback to timeline when not locked
@@ -121,15 +122,30 @@ function M.try_install_rtmidi()
     "python-rtmidi is required for MTC output.\n\n" ..
     "It is free and open-source (MIT license).\n" ..
     "Install it now? (requires internet connection)\n\n" ..
+    "Installation will proceed in background (non-blocking).\n" ..
     "Command: pip3 install python-rtmidi",
     "Install dependency?", 4)  -- 4 = Yes/No buttons
   if ret ~= 6 then return false end  -- 6 = Yes
+
   local q = M.is_win and ('"' .. M.state.python_bin .. '"') or M.state.python_bin
-  os.execute(q .. ' -m pip install python-rtmidi')
-  if M.check_rtmidi() then return true end
-  reaper.MB("Installation failed.\nPlease run: pip3 install python-rtmidi",
-            "Install Failed", 0)
-  return false
+  local background_cmd = q .. ' -m pip install python-rtmidi'
+
+  -- Run async (non-blocking): on Windows with 'start', on Unix with '&'
+  if M.is_win then
+    os.execute('start "" ' .. background_cmd)
+  else
+    os.execute(background_cmd .. ' ' .. M.dev_null .. ' &')
+  end
+
+  -- Show info dialog (non-blocking)
+  reaper.ShowMessageBox(
+    "Installation started in background.\n\n" ..
+    "This may take a minute or two.\n" ..
+    "You can continue using REAPER normally.\n" ..
+    "Restart MTC output when ready.",
+    "Installing python-rtmidi", 0)
+
+  return false  -- Installation is async, so return false for now
 end
 
 -- MIDI port listing
@@ -162,22 +178,58 @@ function M.get_active_tc()
   end
 end
 
+-- Validate IPv4 address format (aaa.bbb.ccc.ddd where each octet is 0-255)
+function M.is_valid_ipv4(ip)
+  if not ip or type(ip) ~= "string" then return false end
+  local octets = {}
+  for octet in ip:gmatch("([^%.]+)") do
+    local n = tonumber(octet)
+    if not n or n < 0 or n > 255 or octet ~= tostring(n) then
+      return false
+    end
+    octets[#octets + 1] = n
+  end
+  return #octets == 4
+end
+
+-- Get track GUID (unique identifier that persists across reorder/add/delete)
+function M.get_track_guid(track)
+  if not track then return nil end
+  local guid = reaper.GetTrackGUID(track)
+  return guid ~= "" and guid or nil
+end
+
+-- Get track by GUID (with optional fallback to index if GUID not found)
+function M.get_track_by_guid(guid, fallback_idx)
+  if not guid then return reaper.GetTrack(0, fallback_idx or 0) end
+  local track_count = reaper.CountTracks(0)
+  for i = 0, track_count - 1 do
+    local tr = reaper.GetTrack(0, i)
+    if tr and M.get_track_guid(tr) == guid then
+      return tr
+    end
+  end
+  -- GUID not found; return fallback track if provided
+  return fallback_idx and reaper.GetTrack(0, fallback_idx) or nil
+end
+
 function M.seconds_to_timecode(pos, fr_type)
+  pos = math.max(0, pos)  -- clamp negative play positions to zero
   local fps = M.FPS_VAL[fr_type + 1]
   if fps == 29.97 then
     local total = math.floor(pos * 30)
     local d  = math.floor(total / 17982)
     local mm = total % 17982
-    local tf = total + 18 * d + 2 * math.floor((mm - 2) / 1798)
+    local tf = total + 18 * d + 2 * math.max(0, math.floor((mm - 2) / 1798))
     return math.floor(tf / 108000) % 24,
            math.floor(tf / 1800) % 60,
            math.floor(tf / 30) % 60,
            tf % 30
   else
     local int_fps = M.FPS_INT[fr_type + 1]
-    local total   = math.floor(pos * fps)
+    local total   = math.floor(pos * int_fps)
     local frames  = total % int_fps
-    local ts      = math.floor(total / fps)
+    local ts      = math.floor(total / int_fps)
     return math.floor(ts / 3600) % 24,
            math.floor(ts / 60) % 60,
            ts % 60,
@@ -198,15 +250,20 @@ function M.load_settings()
     return v ~= "" and v or nil
   end
   local s = M.state
-  s.dest_ip        = gets("dest_ip")        or s.dest_ip
+  local loaded_ip = gets("dest_ip")
+  s.dest_ip = (loaded_ip and M.is_valid_ipv4(loaded_ip)) and loaded_ip or s.dest_ip
   s.framerate_type = tonumber(gets("framerate_type")) or s.framerate_type
   s.artnet_enabled = gets("artnet_enabled") == "true"
   s.mtc_enabled    = gets("mtc_enabled")    == "true"
   s.mtc_port       = gets("mtc_port")       or ""
   s.ltc_enabled    = gets("ltc_enabled")    == "true"
-  s.ltc_track_idx  = tonumber(gets("ltc_track_idx"))
+  s.ltc_track_guid = gets("ltc_track_guid")  -- GUID-based track persistence
   s.threshold_db   = tonumber(gets("threshold_db")) or -24
   s.ltc_fallback   = gets("ltc_fallback") ~= "false"  -- default true
+  -- Resolve GUID to track handle
+  if s.ltc_track_guid then
+    s.ltc_track = M.get_track_by_guid(s.ltc_track_guid)
+  end
 end
 
 function M.save_settings()
@@ -218,7 +275,7 @@ function M.save_settings()
   sets("mtc_enabled",    s.mtc_enabled)
   sets("mtc_port",       s.mtc_port)
   sets("ltc_enabled",    s.ltc_enabled)
-  sets("ltc_track_idx",  s.ltc_track_idx or "")
+  sets("ltc_track_guid", s.ltc_track_guid or "")
   sets("threshold_db",   s.threshold_db)
   sets("ltc_fallback",   s.ltc_fallback)
 end

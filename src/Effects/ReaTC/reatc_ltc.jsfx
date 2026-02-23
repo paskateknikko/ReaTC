@@ -1,12 +1,12 @@
 desc:ReaTC LTC Decoder / Generator
 author:ReaTC
-version:1.0.0-pre3
+version:{{VERSION}}
 
 // Dual-mode SMPTE/EBU LTC processor.
 //
 //   Source mode 0 - Transport: generates LTC from REAPER play position.
 //   Source mode 1 - LTC Input: decodes LTC from incoming audio and
-//                               re-clocks / mirrors it on the output.
+//                               re-encodes / re-clocks it to the output.
 //
 // gmem layout - namespace "ReaTC_LTC" (CLAUDE.md protocol):
 //   [0] TC_HOUR          JSFX -> Script   hours 0-23
@@ -67,6 +67,9 @@ peak_level = 0;     // peak input amplitude (linear)
 // Decoded TC (written by decoder, read by @block for LTC mode)
 dec_h=0; dec_m=0; dec_s=0; dec_f=0; dec_valid=0;
 
+// Previous TC values (for change detection)
+prev_h=0; prev_m=0; prev_s=0; prev_f=0;
+
 // Encoder state --------
 // TC to encode (set from transport pos or decoded TC in @block)
 enc_h=0; enc_m=0; enc_s=0; enc_f=0;
@@ -82,6 +85,11 @@ gfx_alive_first = 1;            // skip first comparison to avoid false positive
 last_mouse_cap = 0;             // debounce clicks
 ltc_detect_samples = 0;  // LTC auto-detect countdown (passive listen)
 
+// NOTE: Variables below are used by both @sample/@block (audio thread) and
+// @gfx (GUI thread) without synchronization. This is a benign race pattern
+// (no thread-safe mechanisms available in EEL2), resulting only in momentarily
+// stale display values. Variables: ltc_detect_samples, fps_type, ltc_rate_mismatch, dec_valid
+
 // LTC rate detection
 ltc_det_max_f = 0;       // max frame number seen in detection window
 ltc_det_df_seen = 0;     // drop-frame flag seen in window (bit 10)
@@ -89,6 +97,9 @@ ltc_det_window = 0;      // samples remaining in detection window (0 = needs ini
 ltc_det_rate = -1;       // detected rate type (-1=unknown, 0-3=type)
 ltc_rate_mismatch = 0;   // 1 if detected rate != configured rate
 ltc_det_frames = 0;      // sync frames seen in current window
+
+// Sample rate change detection
+cached_srate = srate;    // compare in @block to detect rate changes
 
 // Compute derived parameters from sliders --------
 function update_params() (
@@ -109,6 +120,7 @@ function update_params() (
 
 // Non-drop-frame: seconds to TC --------
 function tc_from_pos_ndf(pos) local(total, ts) (
+  pos = max(0, pos);  // clamp negative play positions to zero
   total = floor(pos * fps_int);
   enc_f = total % fps_int;
   ts    = floor(total / fps_int);
@@ -122,10 +134,11 @@ function tc_from_pos_ndf(pos) local(total, ts) (
 // SMPTE algorithm: skip frames 0 and 1 on every minute that is not a
 // multiple of 10.  Correct for all 24-hour wrap cases.
 function tc_from_pos_df(pos) local(total, d, mm, tf) (
+  pos = max(0, pos);  // clamp negative play positions to zero
   total = floor(pos * 30.0);          // nominal 30-fps display frame count
   d     = floor(total / 17982);       // completed 10-minute blocks
   mm    = total % 17982;              // frames within current 10-min block
-  tf    = total + 18*d + 2*floor((mm - 2) / 1798);
+  tf    = total + 18*d + 2*max(0, floor((mm - 2) / 1798));
   enc_h = floor(tf / 108000) % 24;
   enc_m = floor(tf / 1800)   % 60;
   enc_s = floor(tf / 30)     % 60;
@@ -246,10 +259,15 @@ build_enc_frame();
 @slider
 
 update_params();
-build_enc_frame();
 
 
 @block
+
+// Detect sample rate changes
+srate != cached_srate ? (
+  cached_srate = srate;
+  update_params();
+);
 
 src_mode = floor(slider10);
 
@@ -258,10 +276,15 @@ src_mode == 0 ? (
   // Transport mode: derive TC from REAPER play position
   fps_type == 2 ? tc_from_pos_df(play_position) : tc_from_pos_ndf(play_position);
   dec_valid = 1;
-  dec_seq = (dec_seq + 1) & 65535;  // Lua needs seq changes to read TC
 ) : (
   // LTC input mode: mirror last decoded TC (if valid)
   dec_valid ? (enc_h=dec_h; enc_m=dec_m; enc_s=dec_s; enc_f=dec_f;);
+);
+
+// Only increment sequence counter when TC actually changes
+(enc_h != prev_h || enc_m != prev_m || enc_s != prev_s || enc_f != prev_f) ? (
+  dec_seq = (dec_seq + 1) & 65535;  // Lua needs seq changes to read TC
+  prev_h=enc_h; prev_m=enc_m; prev_s=enc_s; prev_f=enc_f;
 );
 
 is_playing = (play_state & 1) ? 1 : 0;
@@ -358,13 +381,15 @@ src_mode == 1 ? (
     ltc_detect_samples = floor(srate * 1.0);  // keep indicator alive for 1 sec
   );
   ltc_detect_samples > 0 ? (ltc_detect_samples -= 1;);
-  peak_level *= exp(log(0.316) * samplesblock / srate);
+  peak_level *= exp(log(0.316) / srate);  // per-sample decay (~10 dB/s)
 );
 
-// LTC Encoder (biphase mark coding) — Transport mode only --------
+// LTC Encoder (biphase mark coding) --------
 // Each bit occupies two half-bits.  Always transition at the bit boundary
 // (start of first half); add a mid-bit transition only for '1' bits.
-src_mode == 0 ? (
+// Runs in both Transport mode (generating from position) and LTC Input
+// mode (re-clocking decoded LTC).
+(
   gen_phase += gen_phase_inc;
   gen_phase >= 1.0 ? (
     gen_phase -= 1.0;
@@ -385,7 +410,6 @@ src_mode == 0 ? (
   // Output: overwrite track audio with LTC signal
   spl0 = gen_out * enc_amp;
   spl1 = gen_out * enc_amp;
-);
 
 
 @gfx 580 240
@@ -603,7 +627,7 @@ mode_btn_hit = mouse_x >= mode_btn_x && mouse_x < mode_btn_x + mode_btn_w && mou
 mode_btn_clicked = mode_btn_hit && (mouse_cap & 1) && !(last_mouse_cap & 1);
 mode_btn_clicked ? (
   slider10 = 1 - slider10;
-  slider_automate(slider10);
+  slider_automate(1<<9);  // bitmask for slider10 (bit 9)
 );
 
 // Save mouse state for debouncing

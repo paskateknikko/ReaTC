@@ -109,15 +109,16 @@ return function(core, outputs, ltc)
     ImGui.SetNextItemWidth(ctx, 180)
     local ip_changed, new_ip = ImGui.InputText(ctx, 'Destination IP', s.dest_ip)
     if ip_changed then
-      local octets = {}
-      for octet in new_ip:gmatch("([^%.]+)") do
-        local n = tonumber(octet)
-        if n then octets[#octets + 1] = math.max(0, math.min(255, n)) end
-      end
-      if #octets == 4 then
-        s.dest_ip = string.format("%d.%d.%d.%d",
-                      octets[1], octets[2], octets[3], octets[4])
+      if core.is_valid_ipv4(new_ip) then
+        s.dest_ip = new_ip
         core.save_settings()
+        -- Restart daemon with new IP
+        if s.artnet_enabled then
+          M.stop_artnet_daemon()
+        end
+      elseif new_ip ~= "" then
+        -- Show error: invalid IP format
+        ImGui.TextColored(ctx, C.red, "Invalid IP: must be aaa.bbb.ccc.ddd (0-255 each)")
       end
     end
 
@@ -193,10 +194,11 @@ return function(core, outputs, ltc)
       if not ltc_val then
         ltc.destroy_accessor()
         s.ltc_track = nil
+        s.ltc_track_guid = nil
         s.tc_valid  = false
       else
-        if s.ltc_track_idx ~= nil then
-          s.ltc_track = reaper.GetTrack(0, s.ltc_track_idx)
+        if s.ltc_track_guid ~= nil then
+          s.ltc_track = core.get_track_by_guid(s.ltc_track_guid)
         end
       end
       s.peak_level = 0
@@ -214,7 +216,7 @@ return function(core, outputs, ltc)
           local _, nm = reaper.GetSetMediaTrackInfo_String(tr, "P_NAME", "", false)
           track_labels[i + 1] = nm ~= "" and string.format("%d: %s", i + 1, nm)
                                           or string.format("Track %d", i + 1)
-          if s.ltc_track_idx == i then
+          if s.ltc_track_guid and core.get_track_guid(tr) == s.ltc_track_guid then
             cur_track_idx = i   -- 0-based for ImGui.Combo
           end
         end
@@ -226,10 +228,13 @@ return function(core, outputs, ltc)
     ImGui.SetNextItemWidth(ctx, 280)
     local tr_changed, new_tr_idx = ImGui.Combo(ctx, 'LTC Track', cur_track_idx, track_items)
     if tr_changed and tc_count > 0 then
-      s.ltc_track_idx = new_tr_idx   -- 0-based, matches s.ltc_track_idx convention
-      ltc.on_track_changed()
-      s.ltc_track = reaper.GetTrack(0, s.ltc_track_idx)
-      core.save_settings()
+      local new_track = reaper.GetTrack(0, new_tr_idx)
+      if new_track then
+        s.ltc_track_guid = core.get_track_guid(new_track)  -- store GUID instead of index
+        ltc.on_track_changed()
+        s.ltc_track = new_track
+        core.save_settings()
+      end
     end
 
     if s.ltc_enabled then
