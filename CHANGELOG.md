@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.2.0] - 2026-02-23
+
+### Added
+
+- **OSC timecode output** — broadcasts SMPTE TC over UDP as a raw OSC message (`/tc ,iiiii H M S F type`) at ~30 fps; persistent daemon, no external Python library required; configurable destination IP, port (default 9000), and OSC address (default `/tc`); targets QLab, MA3, ETC EOS and similar systems
+- **Bake LTC from regions** — generates offline LTC audio WAV files from all project regions and places them as items on a dedicated `LTC [rendered]` track; pure-stdlib Python encoder (`reatc_ltcgen.py`) uses the same biphase-mark algorithm and sync word as the JSFX plugin; sample-accurate frame boundaries; drop-frame aware
+
+### Fixed
+
+- **LTC generator output not muted when transport is stopped** — JSFX encoder kept running and outputting signal even when REAPER was stopped; now silences output when `play_state` is 0
+- **reatc_artnet.py missing from `@provides` and ReaPack index** — file was deployed and used but not listed, causing it to be absent on fresh ReaPack installs
+
+### Improved
+
+- **Settings panel is now a floating modal** — settings open as a popup over the main TC display rather than replacing it, preserving context
+- **Minimum window size enforced** (480 × 160 px) — prevents the window being resized so small the TC display is clipped
+- **Output status indicators** — `● Art-Net  ● MTC  ● OSC` row on the main view shows which outputs are active at a glance
+- **Frames field dimmed** — the `:FF` portion of the large TC display renders at ~67 % opacity, visually de-emphasising sub-second from the timecode address
+- **TC display goes red when stopped** (JSFX Transport mode) — immediate visual feedback when the transport is not running
+- **gmem play-position slot** (index 9) — Lua writes `GetPlayPosition()` to `gmem[9]` each frame for future JSFX use
+
 ## [1.1.0] - 2026-02-23
 
 ### Fixed
