@@ -18,6 +18,7 @@ version:{{VERSION}}
 //   [6] TC_VALID         JSFX -> Script   1=valid 0=invalid/not locked
 //   [7] TC_WRITE_COUNTER JSFX -> Script   incremented each @block (staleness)
 //   [8] SCRIPT_ALIVE     Script -> JSFX   incremented each Lua defer cycle
+//   [9] PLAY_POSITION    Script -> JSFX   play position in seconds (for Transport mode)
 //
 // Slider layout:
 //   1-4   hours/minutes/seconds/frames  output, Lua reads via TrackFX_GetParam
@@ -44,12 +45,14 @@ slider11:-20<-40,0,1>-Output Level dBFS
 @init
 
 // gmem indices (CLAUDE.md) --------
+// Shared with Lua script which attaches via reaper.gmem_attach("ReaTC_LTC")
+// JSFX must declare variables for named gmem access
 TC_HOUR=0; TC_MIN=1; TC_SEC=2; TC_FRAME=3;
 TC_FRAMERATE=4; TC_PLAY_STATE=5; TC_VALID=6;
-TC_WRITE_COUNTER=7; SCRIPT_ALIVE=8;
+TC_WRITE_COUNTER=7; SCRIPT_ALIVE=8; PLAY_POSITION=9;
 
-// Attach named gmem namespace — must match Lua's reaper.gmem_attach("ReaTC_LTC")
-gmem_attach("ReaTC_LTC");
+// Declare gmem namespace for named memory sharing
+gmem_slots = 10;  // minimum slots needed for our indices
 
 // Local memory layout --------
 BIT_BUF   = 0;    // decoder ring buffer: 512 cells (indices 0..511)
@@ -100,6 +103,10 @@ ltc_det_frames = 0;      // sync frames seen in current window
 
 // Sample rate change detection
 cached_srate = srate;    // compare in @block to detect rate changes
+
+// Fallback play position tracking (for Transport mode when Lua not running)
+sample_count = 0;        // cumulative sample counter
+last_gmem_pos = 0;       // last gmem[PLAY_POSITION] value read
 
 // Compute derived parameters from sliders --------
 function update_params() (
@@ -255,6 +262,18 @@ function push_bit(b) (
 update_params();
 build_enc_frame();
 
+// Initialize gmem to zero (Lua will populate it)
+gmem[TC_HOUR] = 0;
+gmem[TC_MIN] = 0;
+gmem[TC_SEC] = 0;
+gmem[TC_FRAME] = 0;
+gmem[TC_FRAMERATE] = fps_type;
+gmem[TC_PLAY_STATE] = 0;
+gmem[TC_VALID] = 0;
+gmem[TC_WRITE_COUNTER] = 0;
+gmem[SCRIPT_ALIVE] = 0;
+gmem[PLAY_POSITION] = 0;
+
 
 @slider
 
@@ -273,7 +292,7 @@ src_mode = floor(slider10);
 
 // Determine TC for encoder --------
 src_mode == 0 ? (
-  // Transport mode: derive TC from REAPER play position
+  // Transport mode: derive TC from REAPER's built-in play_position variable
   fps_type == 2 ? tc_from_pos_df(play_position) : tc_from_pos_ndf(play_position);
   dec_valid = 1;
 ) : (
@@ -353,13 +372,16 @@ src_mode == 1 && dec_valid ? (
 
 @sample
 
+// Track cumulative samples for fallback play position calculation (only when playing)
+(play_state & 1) ? (sample_count += 1);
+
 // LTC Decoder (active in LTC input mode) --------
 // Also passively listens in Transport mode for LTC detect indicator
 s     = (spl0 + spl1) * 0.5;
 abs_s = abs(s);
 
 src_mode == 1 ? (
-  abs_s > peak_level ? (peak_level = abs_s);
+  (abs_s > peak_level) ? (peak_level = abs_s) : (0);
 
   ns = s > thr ? 1 : s < -thr ? -1 : 0;
   ns != 0 && ns != sig_state ? (
@@ -389,7 +411,8 @@ src_mode == 1 ? (
 // (start of first half); add a mid-bit transition only for '1' bits.
 // Runs in both Transport mode (generating from position) and LTC Input
 // mode (re-clocking decoded LTC).
-(
+// Only generate signal when playing; mute output when stopped.
+(play_state & 1) ? (
   gen_phase += gen_phase_inc;
   gen_phase >= 1.0 ? (
     gen_phase -= 1.0;
@@ -403,13 +426,17 @@ src_mode == 1 ? (
       gen_out  = -gen_out;
       gen_bit_pos = (gen_bit_pos + 1) % 80;
       // At frame start, rebuild frame from current enc_* (set in @block)
-      gen_bit_pos == 0 ? build_enc_frame();
+      gen_bit_pos == 0 ? build_enc_frame() : (0);
     );
   );
-  
-  // Output: overwrite track audio with LTC signal
+  // Output: send LTC signal to track
   spl0 = gen_out * enc_amp;
   spl1 = gen_out * enc_amp;
+) : (
+  // When stopped: mute output
+  spl0 = 0;
+  spl1 = 0;
+);
 
 
 @gfx 580 240
@@ -505,12 +532,14 @@ fps_type == 2 ? (
 );
 
 // TC color
-gfx_src == 1 && !gfx_vld ? (
-  gfx_r=0.95; gfx_g=0.68; gfx_b=0.20;
+gfx_src == 0 && gmem[TC_PLAY_STATE] == 0 ? (
+  gfx_r=0.88; gfx_g=0.20; gfx_b=0.20;  // Red when stopped in Transport mode
+) : gfx_src == 1 && !gfx_vld ? (
+  gfx_r=0.95; gfx_g=0.68; gfx_b=0.20;  // Orange when searching in LTC mode
 ) : gfx_vld ? (
-  gfx_r=0.20; gfx_g=0.88; gfx_b=0.38;
+  gfx_r=0.20; gfx_g=0.88; gfx_b=0.38;  // Green when valid
 ) : (
-  gfx_r=0.52; gfx_g=0.54; gfx_b=0.62;
+  gfx_r=0.52; gfx_g=0.54; gfx_b=0.62;  // Gray default
 );
 
 // Dynamic font scaling

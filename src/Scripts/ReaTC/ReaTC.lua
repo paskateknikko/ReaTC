@@ -115,6 +115,9 @@ local function loop()
   -- Signal to JSFX that Lua script is alive (gmem index 8)
   reaper.gmem_write(8, (reaper.gmem_read(8) + 1) % 65536)
 
+  -- Write play position to gmem for Transport mode (gmem index 9)
+  reaper.gmem_write(9, reaper.GetPlayPosition())
+
   core.update_transport_tc()
 
   if state.ltc_enabled and state.ltc_track then
