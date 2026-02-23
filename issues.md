@@ -1,4 +1,6 @@
-# ReaTC — Known Issues & Improvements
+# ReaTC — Fixed Issues & Improvements (historical)
+
+> Note: All issues listed here have been fixed in a released version of ReaTC. This document is kept for historical/reference purposes only and does **not** represent current known issues. For up-to-date status, see the CHANGELOG.
 
 ## Critical
 

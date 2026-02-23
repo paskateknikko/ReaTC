@@ -114,7 +114,7 @@ return function(core, outputs, ltc)
         core.save_settings()
         -- Restart daemon with new IP
         if s.artnet_enabled then
-          M.stop_artnet_daemon()
+          outputs.stop_artnet_daemon()
         end
       elseif new_ip ~= "" then
         -- Show error: invalid IP format
