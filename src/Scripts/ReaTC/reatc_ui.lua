@@ -37,14 +37,21 @@ return function(core, outputs, ltc)
 
   local function draw_main()
     local h, m, sec, f, source = core.get_active_tc()
-    local tc_str       = string.format("%02d:%02d:%02d:%02d", h, m, sec, f)
     local is_ltc_locked = (source == "LTC")
 
-    -- Large TC display
-    ImGui.PushFont(ctx, font_tc)
+    -- TC color
     local tc_color = is_ltc_locked and C.green
                      or ((s.artnet_enabled or s.mtc_enabled) and C.green or C.dim)
-    ImGui.TextColored(ctx, tc_color, tc_str)
+    -- Dimmed variant for frames field: same hue, ~67% alpha
+    local ff_color = (tc_color & 0xFFFFFF00) | 0xAA
+
+    -- Large TC display: HH:MM:SS in full color, :FF slightly dimmed
+    ImGui.PushFont(ctx, font_tc)
+    local hms_str = string.format("%02d:%02d:%02d", h, m, sec)
+    local ff_str  = string.format(":%02d", f)
+    ImGui.TextColored(ctx, tc_color, hms_str)
+    ImGui.SameLine(ctx, 0, 0)
+    ImGui.TextColored(ctx, ff_color, ff_str)
     ImGui.PopFont(ctx)
 
     -- Status line
@@ -71,30 +78,29 @@ return function(core, outputs, ltc)
     end
     ImGui.TextColored(ctx, sl_color, sl)
 
+    -- Output status indicators
+    ImGui.Spacing(ctx)
+    local an_ind_color  = s.artnet_enabled and C.green or C.dim
+    local mtc_ind_color = s.mtc_enabled    and C.green or C.dim
+    ImGui.TextColored(ctx, an_ind_color, "●")
+    ImGui.SameLine(ctx, 0, 4)
+    ImGui.TextColored(ctx, C.text, "Art-Net")
+    ImGui.SameLine(ctx, 0, 16)
+    ImGui.TextColored(ctx, mtc_ind_color, "●")
+    ImGui.SameLine(ctx, 0, 4)
+    ImGui.TextColored(ctx, C.text, "MTC")
+
     ImGui.Spacing(ctx)
     if ImGui.Button(ctx, 'Settings') then
-      s.show_settings = true
+      ImGui.OpenPopup(ctx, 'Settings##popup')
     end
     ImGui.Spacing(ctx)
     ImGui.TextColored(ctx, C.dim, "v" .. core.VERSION)
   end
 
-  -- ── Settings view ──────────────────────────────────────────────────────────
+  -- ── Settings content (rendered inside popup modal) ──────────────────────────
 
   local function draw_settings()
-    -- Header: mini TC + Close button on same row
-    local h, m, sec, f, source = core.get_active_tc()
-    local tc_str        = string.format("%02d:%02d:%02d:%02d", h, m, sec, f)
-    local is_ltc_locked = (source == "LTC")
-    local tc_color      = is_ltc_locked and C.green
-                          or ((s.artnet_enabled or s.mtc_enabled) and C.green or C.dim)
-    ImGui.TextColored(ctx, tc_color, tc_str)
-    ImGui.SameLine(ctx)
-    ImGui.SetCursorPosX(ctx, ImGui.GetWindowWidth(ctx) - 70)
-    if ImGui.Button(ctx, 'Close') then
-      s.show_settings = false
-    end
-
     -- ── Art-Net ──────────────────────────────────────────────────────────────
     ImGui.SeparatorText(ctx, 'Art-Net Output')
 
@@ -151,9 +157,9 @@ return function(core, outputs, ltc)
     end
 
     if s.mtc_enabled then
-      local ports     = s.mtc_ports or {}
+      local ports      = s.mtc_ports or {}
       local port_names = {}
-      local cur_idx   = 0
+      local cur_idx    = 0
       for i, p in ipairs(ports) do
         port_names[i] = (p.index == -1) and "Virtual Port" or p.name
         if (s.mtc_port == "" and p.index == -1) or
@@ -193,9 +199,9 @@ return function(core, outputs, ltc)
       s.ltc_enabled = ltc_val
       if not ltc_val then
         ltc.destroy_accessor()
-        s.ltc_track = nil
+        s.ltc_track      = nil
         s.ltc_track_guid = nil
-        s.tc_valid  = false
+        s.tc_valid       = false
       else
         if s.ltc_track_guid ~= nil then
           s.ltc_track = core.get_track_by_guid(s.ltc_track_guid)
@@ -206,7 +212,7 @@ return function(core, outputs, ltc)
     end
 
     -- Track dropdown
-    local tc_count    = reaper.CountTracks(0)
+    local tc_count     = reaper.CountTracks(0)
     local track_labels = {}
     local cur_track_idx = 0
     if tc_count > 0 then
@@ -282,19 +288,30 @@ return function(core, outputs, ltc)
 
     ImGui.Spacing(ctx)
     ImGui.TextColored(ctx, C.dim, "v" .. core.VERSION)
+    ImGui.Spacing(ctx)
+    if ImGui.Button(ctx, 'Close##settings') then
+      ImGui.CloseCurrentPopup(ctx)
+    end
   end
 
   -- ── Public API ─────────────────────────────────────────────────────────────
 
   -- Returns false when the window is closed (stops the defer loop).
   function M.draw_ui()
+    ImGui.SetNextWindowSizeConstraints(ctx, 480, 160, 1e9, 1e9)
     local visible, open = ImGui.Begin(ctx, 'ReaTC v' .. core.VERSION, true)
     if visible then
       local success, err = pcall(function()
-        if s.show_settings then
+        draw_main()
+
+        -- Settings popup modal (floats over main view)
+        local modal_visible, modal_open = ImGui.BeginPopupModal(ctx, 'Settings##popup', true)
+        if modal_visible then
+          if not modal_open then
+            ImGui.CloseCurrentPopup(ctx)
+          end
           draw_settings()
-        else
-          draw_main()
+          ImGui.EndPopup(ctx)
         end
       end)
       if not success then
