@@ -39,7 +39,7 @@ slider7:1<0,3,1{24fps (Film),25fps (EBU),29.97 DF,30fps (SMPTE)}>-Framerate
 slider8:-24<-48,-6,1>-Threshold dB
 slider9:0<0,1,0.001>-Peak Level
 slider10:0<0,1,1{Transport,LTC Input}>-Source Mode
-slider11:-10<-40,0,1>-Output Level dBFS
+slider11:-20<-40,0,1>-Output Level dBFS
 
 @init
 
@@ -48,8 +48,8 @@ TC_HOUR=0; TC_MIN=1; TC_SEC=2; TC_FRAME=3;
 TC_FRAMERATE=4; TC_PLAY_STATE=5; TC_VALID=6;
 TC_WRITE_COUNTER=7; SCRIPT_ALIVE=8;
 
-// Use gmem directly (works with all REAPER versions)
-// gmem_attach is optional in REAPER 6.32+; direct access still works
+// Use named gmem namespace for JSFX <-> Lua communication
+gmem_attach("ReaTC_LTC");
 
 // Local memory layout --------
 BIT_BUF   = 0;    // decoder ring buffer: 512 cells (indices 0..511)
@@ -79,8 +79,16 @@ gen_out     = 1.0;  // current output polarity (+1 or -1)
 gfx_prev_alive    = -1;
 gfx_alive_timeout = 0;
 gfx_alive_last_value = -1;
-muted = 0;
-last_mouse_cap = 0;  // track previous mouse state for debouncing
+last_mouse_cap = 0;  // debounce clicks
+ltc_detect_samples = 0;  // LTC auto-detect countdown (passive listen)
+
+// LTC rate detection
+ltc_det_max_f = 0;       // max frame number seen in detection window
+ltc_det_df_seen = 0;     // drop-frame flag seen in window (bit 10)
+ltc_det_window = 0;      // samples remaining in detection window (0 = needs init)
+ltc_det_rate = -1;       // detected rate type (-1=unknown, 0-3=type)
+ltc_rate_mismatch = 0;   // 1 if detected rate != configured rate
+ltc_det_frames = 0;      // sync frames seen in current window
 
 // Compute derived parameters from sliders --------
 function update_params() (
@@ -209,6 +217,12 @@ function check_sync() local(wl, wm, i, bv, fs,
     h_u = extract_bits(fs, 48, 4); h_t = extract_bits(fs, 56, 2);
     fr = f_t*10 + f_u; sr = s_t*10 + s_u;
     mr = m_t*10 + m_u; hr = h_t*10 + h_u;
+    // Rate detection: extract before fps_int filter so all frame values are seen
+    fr < 30 && sr < 60 && mr < 60 && hr < 24 ? (
+      fr > ltc_det_max_f ? (ltc_det_max_f = fr);
+      ltc_det_df_seen = ltc_det_df_seen | extract_bits(fs, 10, 1);
+      ltc_det_frames += 1;
+    );
     fr < fps_int && sr < 60 && mr < 60 && hr < 24 ? (
       dec_h = hr; dec_m = mr; dec_s = sr; dec_f = fr;
       dec_valid = 1;
@@ -238,17 +252,19 @@ build_enc_frame();
 @block
 
 src_mode = floor(slider10);
-transport_running = (play_state & 1) ? 1 : 0;
 
 // Determine TC for encoder --------
 src_mode == 0 ? (
-  // Transport mode: derive TC from REAPER timeline position
+  // Transport mode: derive TC from REAPER play position
   fps_type == 2 ? tc_from_pos_df(play_position) : tc_from_pos_ndf(play_position);
-  dec_valid = transport_running;
+  dec_valid = 1;
+  dec_seq = (dec_seq + 1) & 65535;  // Lua needs seq changes to read TC
 ) : (
   // LTC input mode: mirror last decoded TC (if valid)
   dec_valid ? (enc_h=dec_h; enc_m=dec_m; enc_s=dec_s; enc_f=dec_f;);
 );
+
+is_playing = (play_state & 1) ? 1 : 0;
 
 // Write gmem (CLAUDE.md protocol) --------
 gmem[TC_HOUR]          = enc_h;
@@ -256,7 +272,7 @@ gmem[TC_MIN]           = enc_m;
 gmem[TC_SEC]           = enc_s;
 gmem[TC_FRAME]         = enc_f;
 gmem[TC_FRAMERATE]     = fps_type;
-gmem[TC_PLAY_STATE]    = transport_running;
+gmem[TC_PLAY_STATE]    = is_playing;
 gmem[TC_VALID]         = dec_valid;
 gmem[TC_WRITE_COUNTER] = (gmem[TC_WRITE_COUNTER] + 1) & 65535;
 
@@ -276,13 +292,50 @@ valid_samples > 0 ? (
   valid_samples <= 0 ? (valid_samples = 0; dec_valid = 0;);
 );
 
+// LTC rate detection (2-second observation window) --------
+src_mode == 1 && dec_valid ? (
+  // Seed window on first entry
+  ltc_det_window <= 0 ? (ltc_det_window = floor(srate * 2.0));
+  ltc_det_window -= samplesblock;
+  ltc_det_window <= 0 ? (
+    // Only evaluate if we saw enough frames (at least 2 seconds of TC)
+    ltc_det_frames >= 10 ? (
+      ltc_det_df_seen ? (
+        ltc_det_rate = 2;  // 29.97 DF
+      ) : ltc_det_max_f >= 25 ? (
+        ltc_det_rate = 3;  // 30fps
+      ) : ltc_det_max_f >= 24 ? (
+        ltc_det_rate = 1;  // 25fps
+      ) : (
+        ltc_det_rate = 0;  // 24fps
+      );
+      ltc_rate_mismatch = (ltc_det_rate >= 0 && ltc_det_rate != fps_type) ? 1 : 0;
+    );
+    // Reset for next window
+    ltc_det_max_f = 0;
+    ltc_det_df_seen = 0;
+    ltc_det_frames = 0;
+    ltc_det_window = floor(srate * 2.0);
+  );
+) : (
+  // Not in LTC mode or not locked — reset detection
+  ltc_det_rate = -1;
+  ltc_rate_mismatch = 0;
+  ltc_det_max_f = 0;
+  ltc_det_df_seen = 0;
+  ltc_det_frames = 0;
+  ltc_det_window = 0;
+);
+
 
 @sample
 
-// LTC Decoder (active in LTC input mode only) --------
+// LTC Decoder (active in LTC input mode) --------
+// Also passively listens in Transport mode for LTC detect indicator
+s     = (spl0 + spl1) * 0.5;
+abs_s = abs(s);
+
 src_mode == 1 ? (
-  s     = (spl0 + spl1) * 0.5;
-  abs_s = abs(s);
   abs_s > peak_level ? (peak_level = abs_s);
 
   ns = s > thr ? 1 : s < -thr ? -1 : 0;
@@ -300,14 +353,18 @@ src_mode == 1 ? (
     );
   ) : (stt += 1;);
 ) : (
-  // Transport mode: no peak tracking needed
+  // Transport mode: passive LTC detection (check if signal exceeds threshold)
+  abs_s > thr ? (
+    ltc_detect_samples = floor(srate * 1.0);  // keep indicator alive for 1 sec
+  );
+  ltc_detect_samples > 0 ? (ltc_detect_samples -= 1;);
   peak_level *= exp(log(0.316) * samplesblock / srate);
 );
 
 // LTC Encoder (biphase mark coding) — Transport mode only --------
 // Each bit occupies two half-bits.  Always transition at the bit boundary
 // (start of first half); add a mid-bit transition only for '1' bits.
-src_mode == 0 && transport_running ? (
+src_mode == 0 ? (
   gen_phase += gen_phase_inc;
   gen_phase >= 1.0 ? (
     gen_phase -= 1.0;
@@ -325,23 +382,29 @@ src_mode == 0 && transport_running ? (
     );
   );
   
-  // Output: overwrite track audio with LTC signal (unless muted)
-  output_val = muted ? 0 : gen_out * enc_amp;
-  spl0 = output_val;
-  spl1 = output_val;
-):(
-  // No transport run: silence output in transport source mode
-  src_mode == 0 ? (spl0 = 0; spl1 = 0;);
+  // Output: overwrite track audio with LTC signal
+  spl0 = gen_out * enc_amp;
+  spl1 = gen_out * enc_amp;
 );
 
 
 @gfx 580 240
 
-// Background
-gfx_r=0.08; gfx_g=0.08; gfx_b=0.11; gfx_a=1;
+// Common state
+gfx_src = floor(slider10);
+gfx_vld = gmem[TC_VALID];
+ltc_detected = ltc_detect_samples > 0;
+
+// Background: tint changes with mode
+gfx_src == 0 ? (
+  gfx_r=0.08; gfx_g=0.08; gfx_b=0.12;  // Transport: cool blue-black
+) : (
+  gfx_r=0.10; gfx_g=0.08; gfx_b=0.06;  // LTC Input: warm dark
+);
+gfx_a=1;
 gfx_rect(0, 0, gfx_w, gfx_h, 1);
 
-// Script-alive indicator
+// Script-alive computation
 current_alive = gmem[SCRIPT_ALIVE];
 alive_changed = (current_alive != gfx_alive_last_value);
 gfx_alive_last_value = current_alive;
@@ -349,26 +412,9 @@ alive_changed ? (gfx_alive_timeout = 60;);
 gfx_alive_timeout > 0 ? (gfx_alive_timeout -= 1;);
 script_running = gfx_alive_timeout > 0;
 
-// Common status fields
-gfx_src = floor(slider10);
-gfx_vld = gmem[TC_VALID];
-
-fps_type == 0 ? strcpy(#fps_str, "24fps") :
-fps_type == 1 ? strcpy(#fps_str, "25fps") :
-fps_type == 2 ? strcpy(#fps_str, "29.97DF") :
-                strcpy(#fps_str, "30fps");
-
-gfx_src == 0 ? (
-  sprintf(#status_str, "Transport Mode");
-) : gfx_vld ? (
-  sprintf(#status_str, "LTC Locked");
-) : (
-  sprintf(#status_str, "Searching...");
-);
-
-// ── Layout constants ──
+// ── Layout ──
 pad = 12;
-ctl_strip_h = 54;  // fixed height for bottom controls strip
+ctl_strip_h = 54;
 
 panel_x = pad;
 panel_y = pad;
@@ -378,27 +424,26 @@ panel_h = gfx_h - pad * 2;
 // Panel background
 gfx_r=0.11; gfx_g=0.12; gfx_b=0.16; gfx_a=1;
 gfx_rect(panel_x, panel_y, panel_w, panel_h, 1);
-// Panel border (subtle)
+// Panel border
 gfx_r=0.22; gfx_g=0.24; gfx_b=0.32;
 gfx_rect(panel_x, panel_y, panel_w, 1, 1);
 gfx_rect(panel_x, panel_y + panel_h - 1, panel_w, 1, 1);
 gfx_rect(panel_x, panel_y, 1, panel_h, 1);
 gfx_rect(panel_x + panel_w - 1, panel_y, 1, panel_h, 1);
 
-// ── TC Section (top area, everything above the controls strip) ──
+// ── TC Section ──
 tc_x = panel_x;
 tc_y = panel_y;
 tc_w = panel_w;
 tc_h = panel_h - ctl_strip_h;
 
-// Header row: "TIMECODE" left, status badge right
-gfx_setfont(1, "Arial", 10, 'b');
-gfx_r=0.55; gfx_g=0.58; gfx_b=0.68;
+// Header: "TIMECODE" left, RUNNING/OFFLINE badge right
+gfx_setfont(1, "Arial", 12, 'b');
+gfx_r=0.65; gfx_g=0.68; gfx_b=0.78;
 gfx_x = tc_x + 12; gfx_y = tc_y + 8;
 gfx_drawstr("TIMECODE");
 
-// RUNNING / OFFLINE badge
-badge_w = 72; badge_h = 18;
+badge_w = 76; badge_h = 20;
 badge_x = tc_x + tc_w - badge_w - 10;
 badge_y = tc_y + 7;
 script_running ? (
@@ -407,24 +452,29 @@ script_running ? (
   gfx_r=0.50; gfx_g=0.25; gfx_b=0.25;
 );
 gfx_rect(badge_x, badge_y, badge_w, badge_h, 1);
-gfx_setfont(1, "Arial", 9, 'b');
+gfx_setfont(1, "Arial", 10, 'b');
 gfx_r=1; gfx_g=1; gfx_b=1;
-sprintf(#alive_str, script_running ? "RUNNING" : "OFFLINE");
+strcpy(#alive_str, script_running ? "RUNNING" : "OFFLINE");
 gfx_measurestr(#alive_str, atw, ath);
 gfx_x = badge_x + (badge_w - atw) / 2;
 gfx_y = badge_y + (badge_h - ath) / 2;
 gfx_drawstr(#alive_str);
 
-// TC digits — vertically centered in the space between header and status row
-tc_top_margin = 28;  // below header
-tc_bot_margin = 22;  // above status row
+// TC digits — dynamic font, centered
+tc_top_margin = 28;
+tc_bot_margin = 22;
 tc_zone_top = tc_y + tc_top_margin;
 tc_zone_bot = tc_y + tc_h - tc_bot_margin;
 tc_zone_h = tc_zone_bot - tc_zone_top;
 
-sprintf(#tc_str, "%02d:%02d:%02d:%02d", gmem[TC_HOUR], gmem[TC_MIN], gmem[TC_SEC], gmem[TC_FRAME]);
+// Drop-frame semicolon separator per SMPTE convention
+fps_type == 2 ? (
+  sprintf(#tc_str, "%02d:%02d:%02d;%02d", gmem[TC_HOUR], gmem[TC_MIN], gmem[TC_SEC], gmem[TC_FRAME]);
+) : (
+  sprintf(#tc_str, "%02d:%02d:%02d:%02d", gmem[TC_HOUR], gmem[TC_MIN], gmem[TC_SEC], gmem[TC_FRAME]);
+);
 
-// TC color: green=valid, orange=searching, gray=stopped
+// TC color
 gfx_src == 1 && !gfx_vld ? (
   gfx_r=0.95; gfx_g=0.68; gfx_b=0.20;
 ) : gfx_vld ? (
@@ -433,99 +483,116 @@ gfx_src == 1 && !gfx_vld ? (
   gfx_r=0.52; gfx_g=0.54; gfx_b=0.62;
 );
 
-// Adaptive font size
-tc_font = gfx_w < 420 ? 28 : gfx_w < 560 ? 36 : gfx_w < 760 ? 44 : 52;
+// Dynamic font scaling
+tc_avail_w = tc_w - 24;
+tc_font_w = floor(tc_avail_w / 6.5);
+tc_font_h = floor(tc_zone_h * 0.85);
+tc_font = tc_font_w < tc_font_h ? tc_font_w : tc_font_h;
+tc_font < 20 ? tc_font = 20;
+tc_font > 200 ? tc_font = 200;
+
 gfx_setfont(1, "Courier New", tc_font, 'b');
 gfx_measurestr(#tc_str, tcw, tch);
+
+tcw > tc_avail_w ? (
+  tc_font = floor(tc_font * tc_avail_w / tcw);
+  tc_font < 20 ? tc_font = 20;
+  gfx_setfont(1, "Courier New", tc_font, 'b');
+  gfx_measurestr(#tc_str, tcw, tch);
+);
+
 gfx_x = tc_x + (tc_w - tcw) / 2;
 gfx_y = tc_zone_top + (tc_zone_h - tch) / 2;
+gfx_y < tc_zone_top ? gfx_y = tc_zone_top;
 gfx_drawstr(#tc_str);
 
-// Status row: source mode left, fps right
-gfx_setfont(1, "Arial", 10, 0);
-gfx_r=0.55; gfx_g=0.58; gfx_b=0.68;
-gfx_x = tc_x + 12; gfx_y = tc_y + tc_h - 20;
+// Status row
+fps_type == 0 ? strcpy(#fps_str, "24fps") :
+fps_type == 1 ? strcpy(#fps_str, "25fps") :
+fps_type == 2 ? strcpy(#fps_str, "29.97DF") :
+                strcpy(#fps_str, "30fps");
+
+gfx_src == 0 ? (
+  sprintf(#status_str, "Transport  |  Output: %d dBFS", floor(slider11));
+) : gfx_vld ? (
+  ltc_rate_mismatch ? (
+    ltc_det_rate == 0 ? strcpy(#det_fps_str, "24fps") :
+    ltc_det_rate == 1 ? strcpy(#det_fps_str, "25fps") :
+    ltc_det_rate == 2 ? strcpy(#det_fps_str, "29.97DF") :
+                        strcpy(#det_fps_str, "30fps");
+    sprintf(#status_str, "RATE MISMATCH: Input is %s", #det_fps_str);
+  ) : (
+    sprintf(#status_str, "LTC Locked");
+  );
+) : (
+  sprintf(#status_str, "Searching...");
+);
+
+gfx_setfont(1, "Arial", 11, 0);
+gfx_src == 1 && ltc_rate_mismatch ? (
+  gfx_r=0.95; gfx_g=0.55; gfx_b=0.15;  // Warning orange
+) : (
+  gfx_r=0.65; gfx_g=0.68; gfx_b=0.78;  // Normal dim
+);
+gfx_x = tc_x + 12; gfx_y = tc_y + tc_h - 18;
 gfx_drawstr(#status_str);
+
 gfx_measurestr(#fps_str, fpsw, fpsh);
-gfx_x = tc_x + tc_w - fpsw - 12; gfx_y = tc_y + tc_h - 20;
+gfx_x = tc_x + tc_w - fpsw - 12; gfx_y = tc_y + tc_h - 18;
 gfx_drawstr(#fps_str);
 
-// ── Divider line ──
+// ── Divider ──
 gfx_r=0.22; gfx_g=0.24; gfx_b=0.32;
 ctl_y = tc_y + tc_h;
 gfx_rect(panel_x + 1, ctl_y, panel_w - 2, 1, 1);
 
-// ── Controls strip (bottom, fixed height, always visible) ──
+// ── Controls strip ──
 ctl_x = panel_x;
 ctl_w = panel_w;
 
-btn_h = 24;
-btn_y = ctl_y + (ctl_strip_h - btn_h) / 2;
+btn_h = 28;
+btn_y = ctl_y + ctl_strip_h - btn_h - 10;
 
-// Mode button
+// Mode button (prominent, full width)
 mode_btn_x = ctl_x + 12;
-mode_btn_w = 110;
+mode_btn_w = ctl_w - 24;
 mode_btn_y = btn_y;
 
-gfx_src == 0 ? (gfx_r=0.18; gfx_g=0.40; gfx_b=0.72;) : (gfx_r=0.72; gfx_g=0.38; gfx_b=0.18;);
+gfx_src == 0 ? (gfx_r=0.20; gfx_g=0.42; gfx_b=0.75;) : (gfx_r=0.75; gfx_g=0.38; gfx_b=0.18;);
 gfx_rect(mode_btn_x, mode_btn_y, mode_btn_w, btn_h, 1);
 gfx_r=1; gfx_g=1; gfx_b=1;
-gfx_setfont(1, "Arial", 10, 'b');
+gfx_setfont(1, "Arial", 13, 'b');
 strcpy(#mode_text, gfx_src == 0 ? "Transport" : "LTC Input");
 gfx_measurestr(#mode_text, mtw, mth);
 gfx_x = mode_btn_x + (mode_btn_w - mtw) / 2;
 gfx_y = mode_btn_y + (btn_h - mth) / 2;
 gfx_drawstr(#mode_text);
 
-// Mute button
-mute_btn_x = mode_btn_x + mode_btn_w + 8;
-mute_btn_w = 90;
-mute_btn_y = btn_y;
+// Mode description text (above button, centered)
+gfx_setfont(1, "Arial", 11, 0);
+gfx_r=0.70; gfx_g=0.73; gfx_b=0.82;
+gfx_src == 0 ? (
+  strcpy(#mode_desc, "Generates LTC from timeline");
+) : (
+  strcpy(#mode_desc, "Decodes LTC from audio input");
+);
+gfx_measurestr(#mode_desc, mdw, mdh);
+gfx_x = mode_btn_x + (mode_btn_w - mdw) / 2;
+gfx_y = mode_btn_y - mdh - 6;
+gfx_drawstr(#mode_desc);
 
-muted ? (gfx_r=0.65; gfx_g=0.22; gfx_b=0.24;) : (gfx_r=0.18; gfx_g=0.55; gfx_b=0.28;);
-gfx_rect(mute_btn_x, mute_btn_y, mute_btn_w, btn_h, 1);
-gfx_r=1; gfx_g=1; gfx_b=1;
-strcpy(#mute_text, muted ? "MUTED" : "ACTIVE");
-gfx_measurestr(#mute_text, mutw, muth);
-gfx_x = mute_btn_x + (mute_btn_w - mutw) / 2;
-gfx_y = mute_btn_y + (btn_h - muth) / 2;
-gfx_drawstr(#mute_text);
+// LTC Detected indicator (Transport mode only, when LTC signal seen on input)
+gfx_src == 0 && ltc_detected ? (
+  gfx_setfont(1, "Arial", 10, 'b');
+  gfx_r=0.95; gfx_g=0.75; gfx_b=0.15;
+  strcpy(#det_str, "LTC DETECTED");
+  gfx_measurestr(#det_str, detw, deth);
+  gfx_x = mode_btn_x + (mode_btn_w - detw) / 2;
+  gfx_y = mode_btn_y - mdh - deth - 12;
+  gfx_drawstr(#det_str);
+);
 
-// Threshold: label + slider bar + value, right side of controls strip
-thr_label_x = mute_btn_x + mute_btn_w + 16;
-thr_value_w = 48;
-thr_value_x = ctl_x + ctl_w - thr_value_w - 12;
-thr_slider_x = thr_label_x;
-thr_slider_w = thr_value_x - thr_slider_x - 8;
-thr_slider_w < 60 ? thr_slider_w = 60;
-thr_slider_h = 10;
-thr_slider_y = btn_y + (btn_h - thr_slider_h) / 2;
-
-// Label above slider
-gfx_setfont(1, "Arial", 9, 0);
-gfx_r=0.50; gfx_g=0.53; gfx_b=0.62;
-gfx_x = thr_label_x; gfx_y = thr_slider_y - 13;
-gfx_drawstr("Threshold");
-
-// Slider track
-gfx_r=0.06; gfx_g=0.07; gfx_b=0.10;
-gfx_rect(thr_slider_x, thr_slider_y, thr_slider_w, thr_slider_h, 1);
-// Slider fill
-thr_frac = (slider8 - (-48)) / 42;
-thr_fill_w = thr_frac * thr_slider_w;
-gfx_r=0.24; gfx_g=0.56; gfx_b=0.40;
-gfx_rect(thr_slider_x, thr_slider_y, thr_fill_w, thr_slider_h, 1);
-
-// Value readout
-sprintf(#th_val_str, "%d dB", floor(slider8));
-gfx_setfont(1, "Arial", 9, 'b');
-gfx_r=0.78; gfx_g=0.80; gfx_b=0.88;
-gfx_measurestr(#th_val_str, thvw, thvh);
-gfx_x = thr_value_x + (thr_value_w - thvw) / 2;
-gfx_y = thr_slider_y + (thr_slider_h - thvh) / 2;
-gfx_drawstr(#th_val_str);
-
-// ── Interaction: Mode button click ──
+// ── Interaction: Mode button (debounced) ──
 mode_btn_hit = mouse_x >= mode_btn_x && mouse_x < mode_btn_x + mode_btn_w && mouse_y >= mode_btn_y && mouse_y < mode_btn_y + btn_h;
 mode_btn_clicked = mode_btn_hit && (mouse_cap & 1) && !(last_mouse_cap & 1);
 mode_btn_clicked ? (
@@ -533,17 +600,5 @@ mode_btn_clicked ? (
   slider_automate(slider10);
 );
 
-// ── Interaction: Mute button click ──
-mute_btn_hit = mouse_x >= mute_btn_x && mouse_x < mute_btn_x + mute_btn_w && mouse_y >= mute_btn_y && mouse_y < mute_btn_y + btn_h;
-mute_btn_clicked = mute_btn_hit && (mouse_cap & 1) && !(last_mouse_cap & 1);
-mute_btn_clicked ? (muted = 1 - muted;);
-
-// ── Interaction: Threshold slider drag ──
-mouse_x >= thr_slider_x && mouse_x < thr_slider_x + thr_slider_w && mouse_y >= thr_slider_y - 4 && mouse_y < thr_slider_y + thr_slider_h + 4 && (mouse_cap & 1) ? (
-  new_thr = -48 + ((mouse_x - thr_slider_x) / thr_slider_w) * 42;
-  slider8 = max(-48, min(-6, new_thr));
-  slider_automate(slider8);
-);
-
-// Save mouse state for next frame's debouncing
+// Save mouse state for debouncing
 last_mouse_cap = mouse_cap;

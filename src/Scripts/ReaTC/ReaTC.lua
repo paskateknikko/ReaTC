@@ -65,6 +65,9 @@ local state = core.state
 local function init()
   core.load_settings()
 
+  -- Attach to JSFX shared memory for script-alive signalling
+  reaper.gmem_attach("ReaTC_LTC")
+
   state.python_bin = core.find_python()
   if not state.python_bin then
     state.python_error = "Python 3 not found"
@@ -101,6 +104,9 @@ local function loop()
     core.save_settings()
     return  -- do NOT defer again
   end
+
+  -- Signal to JSFX that Lua script is alive (gmem index 8)
+  reaper.gmem_write(8, (reaper.gmem_read(8) + 1) % 65536)
 
   core.update_transport_tc()
 
