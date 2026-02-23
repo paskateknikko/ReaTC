@@ -76,10 +76,10 @@ gen_half    = 0;    // 0=first half, 1=second half of current bit
 gen_out     = 1.0;  // current output polarity (+1 or -1)
 
 // gfx state --------
-gfx_prev_alive    = -1;
-gfx_alive_timeout = 0;
-gfx_alive_last_value = -1;
-last_mouse_cap = 0;  // debounce clicks
+gfx_alive_timeout = 0;          // time_precise() deadline (real seconds)
+gfx_alive_last_value = -1;      // last gmem[8] value seen
+gfx_alive_first = 1;            // skip first comparison to avoid false positive
+last_mouse_cap = 0;             // debounce clicks
 ltc_detect_samples = 0;  // LTC auto-detect countdown (passive listen)
 
 // LTC rate detection
@@ -404,13 +404,19 @@ gfx_src == 0 ? (
 gfx_a=1;
 gfx_rect(0, 0, gfx_w, gfx_h, 1);
 
-// Script-alive computation
+// Script-alive computation (real-time timeout, not frame-count)
 current_alive = gmem[SCRIPT_ALIVE];
-alive_changed = (current_alive != gfx_alive_last_value);
+gfx_alive_first ? (
+  // First @gfx frame after init: record value but don't treat as "changed"
+  // (gmem[8] defaults to 0 which differs from init value -1 → false positive)
+  gfx_alive_first = 0;
+) : (
+  current_alive != gfx_alive_last_value ? (
+    gfx_alive_timeout = time_precise() + 3.0;  // 3-second real-time timeout
+  );
+);
 gfx_alive_last_value = current_alive;
-alive_changed ? (gfx_alive_timeout = 60;);
-gfx_alive_timeout > 0 ? (gfx_alive_timeout -= 1;);
-script_running = gfx_alive_timeout > 0;
+script_running = time_precise() < gfx_alive_timeout;
 
 // ── Layout ──
 pad = 12;
