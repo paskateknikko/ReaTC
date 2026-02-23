@@ -9,8 +9,10 @@
 --   ReaTC/reatc_ltc.lua
 --   ReaTC/reatc_outputs.lua
 --   ReaTC/reatc_ui.lua
+--   ReaTC/reatc_artnet.py
 --   ReaTC/reatc_udp.py
 --   ReaTC/reatc_mtc.py
+--   ReaTC/reatc_osc.py
 --   [effect] ../Effects/ReaTC/reatc_ltc.jsfx
 -- @about
 --   # ReaTC
@@ -102,6 +104,7 @@ local function loop()
     ltc.destroy_accessor()
     outputs.stop_mtc_daemon()
     outputs.stop_artnet_daemon()
+    outputs.stop_osc_daemon()
     core.save_settings()
     return  -- do NOT defer again
   end
@@ -118,6 +121,7 @@ local function loop()
   end
 
   outputs.send_artnet()
+  outputs.send_osc()
   outputs.send_mtc()
 
   reaper.defer(loop)

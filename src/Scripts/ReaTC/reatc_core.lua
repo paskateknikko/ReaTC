@@ -38,6 +38,7 @@ end
 
 M.py_artnet = M.script_path .. "reatc_artnet.py"
 M.py_mtc    = M.script_path .. "reatc_mtc.py"
+M.py_osc    = M.script_path .. "reatc_osc.py"
 
 M.is_win = reaper.GetOS():find("Win") ~= nil
 M.dev_null = M.is_win and "2>NUL" or "2>/dev/null"
@@ -64,6 +65,15 @@ M.state = {
   mtc_error    = nil,
   mtc_ports    = nil,        -- list of {name, index}
   last_mtc_time = 0,
+
+  -- OSC
+  osc_enabled   = false,
+  osc_ip        = "127.0.0.1",
+  osc_port      = 9000,
+  osc_address   = "/tc",
+  osc_proc      = nil,
+  osc_error     = nil,
+  last_osc_time = 0,
 
   -- LTC decoder configuration
   ltc_enabled    = false,
@@ -260,6 +270,11 @@ function M.load_settings()
   s.ltc_track_guid = gets("ltc_track_guid")  -- GUID-based track persistence
   s.threshold_db   = tonumber(gets("threshold_db")) or -24
   s.ltc_fallback   = gets("ltc_fallback") ~= "false"  -- default true
+  s.osc_enabled    = gets("osc_enabled") == "true"
+  local loaded_osc_ip = gets("osc_ip")
+  s.osc_ip         = (loaded_osc_ip and M.is_valid_ipv4(loaded_osc_ip)) and loaded_osc_ip or s.osc_ip
+  s.osc_port       = tonumber(gets("osc_port")) or 9000
+  s.osc_address    = gets("osc_address") or "/tc"
   -- Resolve GUID to track handle
   if s.ltc_track_guid then
     s.ltc_track = M.get_track_by_guid(s.ltc_track_guid)
@@ -278,6 +293,10 @@ function M.save_settings()
   sets("ltc_track_guid", s.ltc_track_guid or "")
   sets("threshold_db",   s.threshold_db)
   sets("ltc_fallback",   s.ltc_fallback)
+  sets("osc_enabled",    s.osc_enabled)
+  sets("osc_ip",         s.osc_ip)
+  sets("osc_port",       s.osc_port)
+  sets("osc_address",    s.osc_address)
 end
 
 return M

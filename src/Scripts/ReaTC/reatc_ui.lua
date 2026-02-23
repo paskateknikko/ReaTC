@@ -82,6 +82,7 @@ return function(core, outputs, ltc)
     ImGui.Spacing(ctx)
     local an_ind_color  = s.artnet_enabled and C.green or C.dim
     local mtc_ind_color = s.mtc_enabled    and C.green or C.dim
+    local osc_ind_color = s.osc_enabled    and C.green or C.dim
     ImGui.TextColored(ctx, an_ind_color, "●")
     ImGui.SameLine(ctx, 0, 4)
     ImGui.TextColored(ctx, C.text, "Art-Net")
@@ -89,6 +90,10 @@ return function(core, outputs, ltc)
     ImGui.TextColored(ctx, mtc_ind_color, "●")
     ImGui.SameLine(ctx, 0, 4)
     ImGui.TextColored(ctx, C.text, "MTC")
+    ImGui.SameLine(ctx, 0, 16)
+    ImGui.TextColored(ctx, osc_ind_color, "●")
+    ImGui.SameLine(ctx, 0, 4)
+    ImGui.TextColored(ctx, C.text, "OSC")
 
     ImGui.Spacing(ctx)
     if ImGui.Button(ctx, 'Settings') then
@@ -134,6 +139,54 @@ return function(core, outputs, ltc)
       ImGui.TextColored(ctx, C.dim, "Python: " .. trunc(s.python_bin, 50))
     else
       ImGui.TextColored(ctx, C.red, "Python 3 not found!")
+    end
+
+    -- ── OSC ──────────────────────────────────────────────────────────────────
+    ImGui.SeparatorText(ctx, 'OSC Output')
+
+    local osc_changed, osc_val = ImGui.Checkbox(ctx, 'Enable##osc', s.osc_enabled)
+    if osc_changed then
+      s.osc_enabled = osc_val
+      if not osc_val then outputs.stop_osc_daemon() end
+      core.save_settings()
+    end
+
+    ImGui.SameLine(ctx)
+    ImGui.SetNextItemWidth(ctx, 180)
+    local osc_ip_changed, new_osc_ip = ImGui.InputText(ctx, 'Destination IP##osc', s.osc_ip)
+    if osc_ip_changed then
+      if core.is_valid_ipv4(new_osc_ip) then
+        s.osc_ip = new_osc_ip
+        core.save_settings()
+        if s.osc_enabled then outputs.stop_osc_daemon() end
+      elseif new_osc_ip ~= "" then
+        ImGui.TextColored(ctx, C.red, "Invalid IP: must be aaa.bbb.ccc.ddd (0-255 each)")
+      end
+    end
+
+    ImGui.SetNextItemWidth(ctx, 80)
+    local osc_port_changed, new_osc_port = ImGui.InputInt(ctx, 'Port##osc', s.osc_port)
+    if osc_port_changed then
+      s.osc_port = math.max(1, math.min(65535, new_osc_port))
+      core.save_settings()
+      if s.osc_enabled then outputs.stop_osc_daemon() end
+    end
+
+    ImGui.SetNextItemWidth(ctx, 180)
+    local osc_addr_changed, new_osc_addr = ImGui.InputText(ctx, 'OSC Address##osc', s.osc_address)
+    if osc_addr_changed then
+      s.osc_address = new_osc_addr
+      core.save_settings()
+      if s.osc_enabled then outputs.stop_osc_daemon() end
+    end
+
+    if s.osc_error then
+      ImGui.TextColored(ctx, C.red, "Error: " .. trunc(s.osc_error, 60))
+    elseif s.osc_enabled then
+      ImGui.TextColored(ctx, C.dim,
+        string.format("Sending to %s:%d  %s", s.osc_ip, s.osc_port, s.osc_address))
+    else
+      ImGui.TextColored(ctx, C.dim, "Open Sound Control output (QLab, MA3, EOS, etc.)")
     end
 
     -- ── MTC ──────────────────────────────────────────────────────────────────
