@@ -214,9 +214,13 @@ jobs:
           REAPACK_README
           sed -i 's/^          //' /tmp/reapack-pub/README.md
 
-          # Commit new version
+          # Commit new version (skip if files are unchanged, e.g. re-run)
           git -C /tmp/reapack-pub add -A
-          git -C /tmp/reapack-pub commit -m "publish: v$VERSION"
+          if ! git -C /tmp/reapack-pub diff --cached --quiet; then
+            git -C /tmp/reapack-pub commit -m "publish: v$VERSION"
+          else
+            echo "No file changes to commit — skipping (re-run of same version?)"
+          fi
 
           # Let reapack-index update index.xml from git history and commit it
           cd /tmp/reapack-pub
