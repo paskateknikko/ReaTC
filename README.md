@@ -125,7 +125,10 @@ In the JSFX plugin UI, enable the outputs you need:
 
 1. Create regions in your REAPER project
 2. Run the ReaTC script, open **Settings**, click **Bake LTC from Regions...**
-3. Rendered WAV items are placed on a `LTC [rendered]` track
+3. Configure TC start and framerate per region, then render
+4. Rendered WAV items are placed on a `LTC [rendered]` track
+
+![Bake LTC from Regions — per-region TC start and framerate](images/regions-to-ltc.png)
 
 
 ## Requirements
