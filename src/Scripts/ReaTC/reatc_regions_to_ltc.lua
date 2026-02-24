@@ -328,7 +328,7 @@ local function draw_ui()
   ImGui.SameLine(ctx, 0, 16)
   ImGui.TextColored(ctx, C.dim, "Set All:")
   ImGui.SameLine(ctx)
-  ImGui.SetNextItemWidth(ctx, 130 * scale)
+  ImGui.SetNextItemWidth(ctx, 130)
   local bulk_changed, bulk_new = ImGui.Combo(ctx, '##bulk_fps', state.bulk_fps_type - 1,
     table.concat(FPS_NAMES, '\0') .. '\0')
   if bulk_changed then
@@ -356,13 +356,13 @@ local function draw_ui()
 
     -- Reserve space for bottom controls
     local avail_y = ImGui.GetContentRegionAvail(ctx)
-    local table_h = math.max(100, avail_y - 120 * scale)
+    local table_h = math.max(100, avail_y - 120)
 
     if ImGui.BeginTable(ctx, 'regions', 4, table_flags, 0, table_h) then
-      ImGui.TableSetupColumn(ctx, ' ',           ImGui.TableColumnFlags_WidthFixed, 30 * scale)
+      ImGui.TableSetupColumn(ctx, ' ',           ImGui.TableColumnFlags_WidthFixed, 30)
       ImGui.TableSetupColumn(ctx, 'Region Name', ImGui.TableColumnFlags_WidthStretch)
-      ImGui.TableSetupColumn(ctx, 'TC Start',    ImGui.TableColumnFlags_WidthFixed, 110 * scale)
-      ImGui.TableSetupColumn(ctx, 'Framerate',   ImGui.TableColumnFlags_WidthFixed, 140 * scale)
+      ImGui.TableSetupColumn(ctx, 'TC Start',    ImGui.TableColumnFlags_WidthFixed, 110)
+      ImGui.TableSetupColumn(ctx, 'Framerate',   ImGui.TableColumnFlags_WidthFixed, 140)
       ImGui.TableHeadersRow(ctx)
 
       for i, rgn in ipairs(state.regions) do
@@ -412,22 +412,22 @@ local function draw_ui()
   ImGui.Spacing(ctx)
 
   ImGui.TextColored(ctx, C.dim, "Track:")
-  ImGui.SameLine(ctx, 80 * scale)
-  ImGui.SetNextItemWidth(ctx, 200 * scale)
+  ImGui.SameLine(ctx, 80)
+  ImGui.SetNextItemWidth(ctx, 200)
   local trk_changed, trk_new = ImGui.InputText(ctx, '##track', state.track_name)
   if trk_changed then state.track_name = trk_new end
 
   ImGui.TextColored(ctx, C.dim, "Template:")
-  ImGui.SameLine(ctx, 80 * scale)
-  ImGui.SetNextItemWidth(ctx, 200 * scale)
+  ImGui.SameLine(ctx, 80)
+  ImGui.SetNextItemWidth(ctx, 200)
   local tpl_changed, tpl_new = ImGui.InputText(ctx, '##template', state.file_template)
   if tpl_changed then state.file_template = tpl_new end
   ImGui.SameLine(ctx)
   ImGui.TextColored(ctx, C.dim, "{name} {tc} {fps} {index}")
 
   ImGui.TextColored(ctx, C.dim, "Level:")
-  ImGui.SameLine(ctx, 80 * scale)
-  ImGui.SetNextItemWidth(ctx, 200 * scale)
+  ImGui.SameLine(ctx, 80)
+  ImGui.SetNextItemWidth(ctx, 200)
   local lvl_changed, lvl_new = ImGui.SliderInt(ctx, '##level', state.level_dbfs, -48, 0,
     '%d dBFS')
   if lvl_changed then state.level_dbfs = lvl_new end
@@ -438,7 +438,7 @@ local function draw_ui()
   if not can_generate then
     ImGui.BeginDisabled(ctx)
   end
-  if ImGui.Button(ctx, 'Generate LTC', 140 * scale, 0) then
+  if ImGui.Button(ctx, 'Generate LTC', 140, 0) then
     generate_selected()
     -- Refresh regions after generation
     state.regions = build_region_table(collect_regions())
