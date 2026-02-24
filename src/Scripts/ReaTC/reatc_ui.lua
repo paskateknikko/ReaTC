@@ -32,8 +32,9 @@ return function(core, outputs)
     ctx    = ImGui.CreateContext('ReaTC')
     font_tc = ImGui.CreateFont('Courier New', ImGui.FontFlags_Bold)
     ImGui.Attach(ctx, font_tc)
+  end
 
-    -- Dark style matching JSFX palette
+  local function push_style()
     ImGui.PushStyleColor(ctx, ImGui.Col_WindowBg,        0x0F0F17FF)
     ImGui.PushStyleColor(ctx, ImGui.Col_TitleBg,         0x1A1C25FF)
     ImGui.PushStyleColor(ctx, ImGui.Col_TitleBgActive,   0x1A1C25FF)
@@ -307,6 +308,7 @@ return function(core, outputs)
 
   -- Returns false when the window is closed (stops the defer loop).
   function M.draw_ui()
+    push_style()
     ImGui.SetNextWindowSizeConstraints(ctx, 360, 120, 1e9, 1e9)
     local visible, open = ImGui.Begin(ctx, 'ReaTC v' .. core.VERSION, true)
     if visible then
@@ -332,6 +334,7 @@ return function(core, outputs)
       ImGui.PopFont(ctx)
     end
     ImGui.End(ctx)
+    ImGui.PopStyleColor(ctx, 18)
     return open
   end
 

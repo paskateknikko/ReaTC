@@ -56,25 +56,26 @@ local C = {
 
 local ctx = ImGui.CreateContext('ReaTC — Regions to LTC')
 
--- Push dark style
-ImGui.PushStyleColor(ctx, ImGui.Col_WindowBg,        0x0F0F17FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_TitleBg,         0x1A1C25FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_TitleBgActive,   0x1A1C25FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_PopupBg,         0x1E2029FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_FrameBg,         0x262833FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_FrameBgHovered,  0x2D3040FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_FrameBgActive,   0x333849FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_Border,          0x333849FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_Button,          0x2D3040FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_ButtonHovered,   0x3A3D52FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_ButtonActive,    0x333849FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_CheckMark,       0x33D95AFF)
-ImGui.PushStyleColor(ctx, ImGui.Col_SliderGrab,      0x3A3D52FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_SliderGrabActive,0x5AA4F2FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_Header,          0x2D3040FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_HeaderHovered,   0x3A3D52FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_HeaderActive,    0x333849FF)
-ImGui.PushStyleColor(ctx, ImGui.Col_Text,            0xE5E5E5FF)
+local function push_style()
+  ImGui.PushStyleColor(ctx, ImGui.Col_WindowBg,        0x0F0F17FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_TitleBg,         0x1A1C25FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_TitleBgActive,   0x1A1C25FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_PopupBg,         0x1E2029FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_FrameBg,         0x262833FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_FrameBgHovered,  0x2D3040FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_FrameBgActive,   0x333849FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_Border,          0x333849FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_Button,          0x2D3040FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_ButtonHovered,   0x3A3D52FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_ButtonActive,    0x333849FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_CheckMark,       0x33D95AFF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_SliderGrab,      0x3A3D52FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_SliderGrabActive,0x5AA4F2FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_Header,          0x2D3040FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_HeaderHovered,   0x3A3D52FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_HeaderActive,    0x333849FF)
+  ImGui.PushStyleColor(ctx, ImGui.Col_Text,            0xE5E5E5FF)
+end
 
 -- ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -298,10 +299,12 @@ end
 -- ── UI Drawing ─────────────────────────────────────────────────────────────
 
 local function draw_ui()
+  push_style()
   ImGui.SetNextWindowSizeConstraints(ctx, 600, 400, 1e9, 1e9)
   local visible, open = ImGui.Begin(ctx, 'ReaTC \u{2014} Bake LTC', true)
   if not visible then
     ImGui.End(ctx)
+    ImGui.PopStyleColor(ctx, 18)
     return open
   end
 
@@ -452,6 +455,7 @@ local function draw_ui()
     string.format("%d of %d regions selected", n_selected, n_regions))
 
   ImGui.End(ctx)
+  ImGui.PopStyleColor(ctx, 18)
   return open
 end
 

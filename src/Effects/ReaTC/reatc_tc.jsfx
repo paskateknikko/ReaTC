@@ -1,6 +1,17 @@
 desc:ReaTC Timecode Converter
 author:Tuukka Aimasmäki
 version:{{VERSION}}
+// @about
+//   # ReaTC Timecode Converter
+//   Unified SMPTE/EBU timecode processor for REAPER.
+//
+//   **Sources**: LTC audio decode, MTC decode, REAPER Timeline
+//   **Outputs**: LTC audio encode, MTC quarter-frame, gmem bridge to Lua script
+//
+//   Insert this JSFX on any track. Configure sources and outputs via the plugin UI.
+//   Part of the [ReaTC](https://github.com/paskateknikko/ReaTC) package.
+// @changelog
+//   {{CHANGELOG}}
 
 // ReaTC — https://github.com/paskateknikko/ReaTC
 // Copyright (c) 2025 Tuukka Aimasmäki. MIT License — see LICENSE.

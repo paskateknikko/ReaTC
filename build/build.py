@@ -87,8 +87,11 @@ def build(version="DEV"):
                     with open(filepath, "r") as f:
                         content = f.read()
                     content = substitute_version(content, version)
-                    # Join multi-line changelog so every line stays inside a Lua comment
-                    changelog_commented = "\n-- ".join(changelog.split("\n"))
+                    # Join multi-line changelog with comment prefix matching file type
+                    if filepath.suffix == '.jsfx':
+                        changelog_commented = "\n// ".join(changelog.split("\n"))
+                    else:
+                        changelog_commented = "\n-- ".join(changelog.split("\n"))
                     content = content.replace("{{CHANGELOG}}", changelog_commented)
                     dist_file = dist_dir / filepath.name
                     with open(dist_file, "w") as f:

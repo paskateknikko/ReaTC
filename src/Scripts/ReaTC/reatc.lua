@@ -2,6 +2,16 @@
 -- @author Tuukka Aimasmäki
 -- @version {{VERSION}}
 -- @link https://github.com/paskateknikko/ReaTC
+-- @about
+--   # ReaTC
+--   Sync REAPER with your lighting console using Art-Net, MIDI Timecode, and OSC.
+--
+--   **Sources**: LTC audio, MIDI Timecode, REAPER Timeline (priority-based failover)
+--   **Outputs**: Art-Net, MTC, OSC, LTC audio, Region-based LTC bake
+--
+--   Requires REAPER 6.32+, ReaImGui, Python 3. Cross-platform (macOS 10.15+, Windows 10+).
+--
+--   [GitHub](https://github.com/paskateknikko/ReaTC)
 -- @provides
 --   [main] reatc.lua
 --   [main] reatc_regions_to_ltc.lua
