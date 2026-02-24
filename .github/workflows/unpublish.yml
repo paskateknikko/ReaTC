@@ -1,0 +1,103 @@
+name: Unpublish on Release Delete
+
+on:
+  release:
+    types: [deleted]
+
+permissions:
+  contents: write
+
+jobs:
+  unpublish:
+    if: startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set version from release tag
+        id: version
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Check reapack branch exists
+        id: check
+        run: |
+          if gh api repos/${{ github.repository }}/branches/reapack --silent 2>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "No reapack branch, nothing to unpublish"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.exists == 'true'
+        with:
+          ref: reapack
+          fetch-depth: 0
+
+      - name: Remove version from ReaPack index
+        if: steps.check.outputs.exists == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ ! -f index.xml ]; then
+            echo "No index.xml found, nothing to unpublish"
+            exit 0
+          fi
+          python3 << 'PYEOF'
+          import re, os
+
+          version = os.environ["VERSION"]
+          content = open("index.xml").read()
+
+          # Remove <version name="X.X.X" ...>...</version> blocks (including surrounding whitespace)
+          pattern = r'\s*<version name="' + re.escape(version) + r'"[^>]*>.*?</version>'
+          new_content = re.sub(pattern, '', content, flags=re.DOTALL)
+
+          if content == new_content:
+              print(f"Version {version} not found in index.xml")
+          else:
+              open("index.xml", "w").write(new_content)
+              print(f"Removed version {version} from index.xml")
+          PYEOF
+
+      - name: Find and revert publish commit
+        if: steps.check.outputs.exists == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Find the "publish: vX.X.X" commit on the reapack branch
+          COMMIT=$(git log --all --grep="^publish: v${VERSION}$" --format="%H" | head -1)
+          if [ -n "$COMMIT" ]; then
+            echo "Reverting publish commit $COMMIT"
+            git revert --no-commit "$COMMIT" || true
+            # Keep index.xml as we already edited it above
+            git checkout HEAD -- index.xml 2>/dev/null || true
+          else
+            echo "No publish commit found for v${VERSION}"
+          fi
+
+      - name: Delete git tag
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          gh api repos/${{ github.repository }}/git/refs/tags/$TAG -X DELETE 2>/dev/null \
+            || echo "Tag $TAG already deleted or not found"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push
+        if: steps.check.outputs.exists == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "unpublish: v$VERSION"
+            git push origin reapack
+          fi

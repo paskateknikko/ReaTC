@@ -1,0 +1,236 @@
+name: Release on Version Tag
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'  # Semantic versioning: v1.0.0, v1.0.0-beta, etc.
+
+permissions:
+  contents: write
+
+jobs:
+  build-extension:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest        # Apple Silicon runner
+            artifact: reaper_reatc-arm64.dylib
+          - os: macos-15-intel     # Intel runner
+            artifact: reaper_reatc-x86_64.dylib
+          - os: windows-latest
+            artifact: reaper_reatc64.dll
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build extension
+        run: |
+          cmake -S src/extension -B src/extension/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build src/extension/build --config Release
+
+      - name: Rename artifact
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp src/extension/build/Release/reaper_reatc64.dll "${{ matrix.artifact }}"
+          else
+            cp src/extension/build/reaper_reatc.* "${{ matrix.artifact }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: build-extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: jdx/mise-action@v2
+
+      - name: Set version from tag
+        id: version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          echo "version=${VERSION#v}" >> $GITHUB_OUTPUT
+
+      - name: Check CHANGELOG entry
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BASE_VERSION=$(echo "$VERSION" | sed 's/-.*//')
+          # Skip changelog check for pre-releases (e.g. 2.1.0-beta-1)
+          if echo "$VERSION" | grep -q '-'; then
+            echo "⏭ Pre-release detected, skipping CHANGELOG check"
+            exit 0
+          fi
+          if ! grep -qE "## \[($VERSION|$BASE_VERSION)\]" CHANGELOG.md 2>/dev/null; then
+            echo "ERROR: CHANGELOG.md missing entry for v$VERSION (or base v$BASE_VERSION)"
+            exit 1
+          fi
+          echo "✓ CHANGELOG.md has entry for v$VERSION"
+
+      - name: Build package
+        run: python3 build/build.py --version "${{ steps.version.outputs.version }}"
+
+      - name: Verify build artifacts
+        run: |
+          REQUIRED_FILES=(
+            "dist/LICENSE"
+            "dist/README.md"
+            "dist/ABOUT.md"
+            "dist/Scripts/ReaTC/reatc.lua"
+            "dist/Scripts/ReaTC/reatc_core.lua"
+            "dist/Scripts/ReaTC/reatc_outputs.lua"
+            "dist/Scripts/ReaTC/reatc_ui.lua"
+            "dist/Scripts/ReaTC/reatc_regions_to_ltc.lua"
+            "dist/Scripts/ReaTC/reatc_artnet.py"
+            "dist/Scripts/ReaTC/reatc_osc.py"
+            "dist/Scripts/ReaTC/reatc_ltcgen.py"
+            "dist/Effects/ReaTC/reatc_tc.jsfx"
+          )
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "ERROR: Missing required file: $file"
+              exit 1
+            fi
+          done
+          echo "✓ All build artifacts verified"
+
+      - name: Generate release notes
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          REPO="${{ github.repository }}"
+
+          # Extract changelog section for this version (pre-releases fall back to [unreleased])
+          CHANGELOG=$(python3 -c "
+          import re, sys
+          v = sys.argv[1]
+          txt = open('CHANGELOG.md').read()
+          # Try exact version first
+          m = re.search(r'(?m)^## \[' + re.escape(v) + r'\][^\n]*\n(.*?)(?=^## \[|\Z)', txt, re.DOTALL)
+          if not m and '-' in v:
+              # Pre-release: try [unreleased ...] or [WIP ...] section
+              m = re.search(r'(?mi)^## \[(?:unreleased|wip)[^\]]*\][^\n]*\n(.*?)(?=^## \[|\Z)', txt, re.DOTALL)
+          print((m.group(1).strip() if m else '') or 'See CHANGELOG.md for details')
+          " "$VERSION")
+
+          cat > release_notes.md << NOTES_EOF
+          ## Install via ReaPack (recommended)
+
+          1. In REAPER: **Extensions → ReaPack → Import repositories…**
+          2. Paste this URL:
+             \`\`\`
+             https://raw.githubusercontent.com/${REPO}/reapack/index.xml
+             \`\`\`
+          3. **Extensions → ReaPack → Browse packages** → search **ReaTC** → install
+
+          ## Manual install
+
+          1. Download **ReaTC-${VERSION}.zip** below
+          2. Extract into your REAPER resource folder (Options → Show REAPER resource path…)
+             - \`Scripts/ReaTC/\` and \`Effects/ReaTC/\` should end up inside the resource folder
+          3. Load \`Scripts/ReaTC/ReaTC.lua\` via Actions → Load ReaScript
+
+          ## C++ Extension (optional)
+
+          Download the binary for your platform and copy to REAPER's \`UserPlugins/\` folder.
+          This registers human-readable action names (\`_REATC_MAIN\`, etc.) for OSC/controller mapping.
+
+          ## Changes
+
+          ${CHANGELOG}
+          NOTES_EOF
+
+          # Remove leading whitespace from heredoc indentation
+          sed -i 's/^          //' release_notes.md
+
+      - name: Create zip artifact
+        run: |
+          cd dist
+          zip -r "../ReaTC-${{ steps.version.outputs.version }}.zip" .
+          ls -lh "../ReaTC-${{ steps.version.outputs.version }}.zip"
+
+      - name: Download extension binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: extension-binaries
+          merge-multiple: true
+
+      - name: Set up Ruby for reapack-index
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+
+      - name: Install pandoc and reapack-index
+        run: |
+          sudo apt-get install -y pandoc
+          gem install reapack-index
+
+      - name: Publish to reapack branch
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+
+          # Fetch existing reapack branch if it exists
+          git fetch origin reapack 2>/dev/null || true
+
+          # Check out existing reapack branch or create fresh orphan
+          if git show-ref --verify refs/remotes/origin/reapack 2>/dev/null; then
+            git worktree add /tmp/reapack-pub origin/reapack
+          else
+            git worktree add --no-checkout /tmp/reapack-pub HEAD
+            git -C /tmp/reapack-pub checkout --orphan reapack
+            git -C /tmp/reapack-pub rm -rf . 2>/dev/null || true
+          fi
+
+          # Remove old package files so stale artifacts don't persist
+          rm -rf /tmp/reapack-pub/Scripts /tmp/reapack-pub/Effects
+
+          # Copy built files (reapack-index uses git SHA for per-version URLs)
+          cp -r dist/Scripts dist/Effects /tmp/reapack-pub/
+          cp dist/ABOUT.md /tmp/reapack-pub/
+
+          # Copy extension binaries alongside scripts (referenced by @provides)
+          cp extension-binaries/reaper_reatc* /tmp/reapack-pub/Scripts/ReaTC/
+
+          # Generate a reapack-branch-specific README
+          cat > /tmp/reapack-pub/README.md << 'REAPACK_README'
+          # ReaTC — reapack branch
+
+          This branch is **auto-generated by CI**. It contains the built packages and
+          `index.xml` used by [ReaPack](https://reapack.com/) to distribute ReaTC.
+
+          **Do not commit to this branch manually.**
+
+          For source code, documentation, and issues visit the
+          [main branch](https://github.com/paskateknikko/ReaTC).
+          REAPACK_README
+          sed -i 's/^          //' /tmp/reapack-pub/README.md
+
+          # Commit new version
+          git -C /tmp/reapack-pub add -A
+          git -C /tmp/reapack-pub commit -m "publish: v$VERSION"
+
+          # Let reapack-index update index.xml from git history and commit it
+          cd /tmp/reapack-pub
+          reapack-index --name "ReaTC" --about ABOUT.md --commit
+
+          git push origin HEAD:reapack
+
+      - name: Upload release with artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ReaTC-${{ steps.version.outputs.version }}.zip
+            extension-binaries/*
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          token: ${{ secrets.RELEASE_PAT }}

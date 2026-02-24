@@ -1,0 +1,53 @@
+name: Check
+
+on:
+  push:
+    branches: [main, dev]
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    name: Validate build and syntax
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+
+      - name: Build smoke test
+        run: make build VERSION=DEV
+
+      - name: Verify build artifacts
+        run: make verify VERSION=DEV
+
+      - name: Check no {{VERSION}} placeholders remain in dist/
+        run: |
+          if grep -rq '{{VERSION}}' dist/ 2>/dev/null; then
+            echo "ERROR: {{VERSION}} placeholder found in dist/ after build"
+            grep -rn '{{VERSION}}' dist/
+            exit 1
+          fi
+          echo "✓ No unsubstituted placeholders"
+
+      - name: Validate Python syntax (all files)
+        run: |
+          find src/ -name '*.py' | sort | while read f; do
+            python3 -m py_compile "$f" && echo "  ✓ $f"
+          done
+          echo "✓ All Python files passed syntax check"
+
+  build-extension:
+    runs-on: ubuntu-latest
+    name: Build C++ extension
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build extension
+        run: |
+          cmake -S src/extension -B src/extension/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build src/extension/build --config Release
+          echo "✓ C++ extension compiled successfully"

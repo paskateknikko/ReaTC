@@ -1,0 +1,69 @@
+flowchart TD
+    classDef device      fill:#1e1e2e,stroke:#89b4fa,color:#cdd6f4
+    classDef fx          fill:#313244,stroke:#cba6f7,color:#cdd6f4
+    classDef output      fill:#313244,stroke:#f38ba8,color:#cdd6f4
+    classDef destination fill:#1e1e2e,stroke:#fab387,color:#cdd6f4
+    classDef script      fill:#313244,stroke:#a6e3a1,color:#cdd6f4
+    classDef daemon      fill:#313244,stroke:#89dceb,color:#cdd6f4
+
+    subgraph REAPER ["🎬 REAPER"]
+        direction TB
+
+        subgraph TRACK ["🎞️ ReaTC Track"]
+            direction TB
+
+            subgraph SOURCES ["Sources"]
+                direction LR
+                LTC_AUDIO(["🎵 LTC Audio In"]):::device
+                MTC_MIDI(["🎹 MTC MIDI In"]):::device
+                TIMELINE(["⏱️ Timeline"]):::device
+            end
+
+            subgraph JSFX ["ReaTC Timecode Converter · JSFX"]
+                direction TB
+                DECODE["Decode & Priority"]:::fx
+                ENCODE["Outputs"]:::fx
+                DECODE --> ENCODE
+            end
+
+            SOURCES --> DECODE
+        end
+
+        subgraph LUA ["⚙️ ReaTC Lua Script"]
+            direction TB
+            GMEM_READ["gmem read"]:::script
+            UI["🖥️ UI · ReaImGui"]:::script
+            GMEM_READ --> UI
+
+            subgraph DAEMONS ["Python Daemons · stdin"]
+                direction LR
+                ARTNET_PY["reatc_artnet.py"]:::daemon
+                OSC_PY["reatc_osc.py"]:::daemon
+            end
+
+            GMEM_READ --> DAEMONS
+        end
+
+        ENCODE -- "gmem" --> GMEM_READ
+        ENCODE -- "LTC Audio" --> PHY_OUT(["🔌 Audio Output"]):::output
+        ENCODE -- "MTC Quarter-Frame" --> MIDI_OUT(["🎹 MIDI Output"]):::output
+    end
+
+    subgraph DESTINATIONS ["📡 Timecode Destinations"]
+        direction LR
+        subgraph CONSOLE ["Lighting Console"]
+            style CONSOLE stroke:#ffeb3b,stroke-width:2px,fill:#1a1a00
+            ARTNET_IN(["Art-Net In"]):::destination
+            LTC_IN(["LTC Audio In"]):::destination
+            OSC_IN(["OSC In"]):::destination
+        end
+        subgraph MTC_DEST ["MTC Device"]
+            style MTC_DEST stroke:#66bb6a,stroke-width:2px,fill:#001a00
+            MTC_IN(["MTC In"]):::destination
+        end
+    end
+
+    ARTNET_PY -- "UDP 6454" --> ARTNET_IN
+    OSC_PY -- "UDP" --> OSC_IN
+    PHY_OUT --> LTC_IN
+    MIDI_OUT --> MTC_IN

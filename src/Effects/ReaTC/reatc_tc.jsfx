@@ -1,0 +1,1895 @@
+desc:ReaTC Timecode Converter
+author:Tuukka Aimasmäki
+version:{{VERSION}}
+
+// ReaTC — https://github.com/paskateknikko/ReaTC
+// Copyright (c) 2025 Tuukka Aimasmäki. MIT License — see LICENSE.
+//
+// Unified SMPTE/EBU timecode processor with multiple sources and outputs.
+//
+// SOURCES (toggleable, with priority):
+//   - LTC Input:  biphase-mark decoder from audio input
+//   - MTC Input:  MIDI quarter-frame / full-frame SysEx decoder
+//   - Timeline:   REAPER transport play_position
+//
+// OUTPUTS (toggleable):
+//   - LTC Output:  biphase-mark encoded audio
+//   - MTC Output:  MIDI quarter-frame messages
+//   - Script/gmem: shared memory for Lua script (Art-Net, OSC)
+//
+// gmem layout - namespace "ReaTC_LTC":
+//   [0] TC_HOUR          JSFX -> Script   hours 0-23
+//   [1] TC_MIN           JSFX -> Script   minutes 0-59
+//   [2] TC_SEC           JSFX -> Script   seconds 0-59
+//   [3] TC_FRAME         JSFX -> Script   frames 0-(fps-1)
+//   [4] TC_FRAMERATE     JSFX -> Script   0=24 1=25 2=29.97DF 3=30
+//   [5] TC_PLAY_STATE    JSFX -> Script   0=stop 1=play
+//   [6] TC_VALID         JSFX -> Script   1=valid 0=invalid
+//   [7] TC_WRITE_COUNTER JSFX -> Script   incremented each @block
+//   [8] SCRIPT_ALIVE     Script -> JSFX   incremented each Lua defer cycle
+//   [17] ACTIVE_SOURCE   JSFX -> Script   0=none 1=LTC 2=MTC 3=Timeline
+//   [18] LTC_LOCK_STATUS JSFX -> Script   0/1
+//   [19] MTC_LOCK_STATUS JSFX -> Script   0/1
+//   [20] TC_OFFSET_H     Script -> JSFX   offset hours (0-23)
+//   [21] TC_OFFSET_M     Script -> JSFX   offset minutes (0-59)
+//   [22] TC_OFFSET_S     Script -> JSFX   offset seconds (0-59)
+//   [23] TC_OFFSET_F     Script -> JSFX   offset frames (0-fps)
+//   [24] TC_OFFSET_SIGN  Script -> JSFX   0=add 1=subtract
+
+// Source toggles
+slider1:1<0,1,1{Off,On}>-LTC Input
+slider3:1<0,1,1{Off,On}>-MTC Input
+slider5:0<0,1,1{Off,On}>-Timeline
+
+// Output toggles
+slider7:1<0,1,1{Off,On}>-LTC Output
+slider8:0<0,1,1{Off,On}>-MTC Output
+slider9:1<0,1,1{Off,On}>-Script Output
+
+// Parameters
+slider10:1<0,3,1{24fps (Film),25fps (EBU),29.97 DF,30fps (SMPTE)}>-Framerate
+slider11:-24<-48,-6,1>-LTC Threshold dB
+slider12:-10<-40,0,1>-LTC Output Level dBFS
+
+// Read-back (display only)
+slider13:0<0,23,1>-Hours
+slider14:0<0,59,1>-Minutes
+slider15:0<0,59,1>-Seconds
+slider16:0<0,29,1>-Frames
+slider17:0<0,1,1{Invalid,Valid}>-TC Valid
+slider18:0<0,65535,1>-Sequence
+slider19:0<0,3,1{None,LTC,MTC,Timeline}>-Active Source
+slider20:0<0,1,0.001>-Peak Level
+slider21:0<0,1,1{Unlocked,Locked}>-LTC Locked
+slider22:0<0,1,1{Unlocked,Locked}>-MTC Locked
+slider23:0<0,1,1{Inactive,Active}>-Timeline Active
+
+options:gmem=ReaTC_LTC
+
+
+@init
+
+// gmem indices
+TC_HOUR=0; TC_MIN=1; TC_SEC=2; TC_FRAME=3;
+TC_FRAMERATE=4; TC_PLAY_STATE=5; TC_VALID=6;
+TC_WRITE_COUNTER=7; SCRIPT_ALIVE=8;
+ACTIVE_SOURCE=17; LTC_LOCK_STATUS=18; MTC_LOCK_STATUS=19;
+TC_OFFSET_H=20; TC_OFFSET_M=21; TC_OFFSET_S=22; TC_OFFSET_F=23; TC_OFFSET_SIGN=24;
+
+// Source IDs
+SRC_NONE=0; SRC_LTC=1; SRC_MTC=2; SRC_TIMELINE=3;
+
+// Local memory layout
+BIT_BUF   = 0;    // LTC decoder ring buffer: 512 cells (0..511)
+GEN_FRAME = 512;  // LTC encoder frame bits: 80 cells (512..591)
+FF_BUF    = 600;  // MTC Full Frame SysEx buffer: 10 cells (600..609)
+MIDI_IN_BUF = 700; // Incoming MIDI event buffer: 32 cells (700..731)
+
+// ── LTC Decoder state ──
+sig_state = 0;
+bpm_state = 0;
+stt       = 0;
+bit_idx   = 0;
+bpm_period = 0;
+ltc_valid_samples = 0;
+ltc_dec_seq   = 0;
+peak_level = 0;
+
+// Decoded LTC TC
+ltc_h=0; ltc_m=0; ltc_s=0; ltc_f=0; ltc_locked=0;
+
+// LTC rate detection
+ltc_det_max_f = 0;
+ltc_det_df_seen = 0;
+ltc_det_window = 0;
+ltc_det_rate = -1;
+ltc_rate_mismatch = 0;
+ltc_det_frames = 0;
+
+// ── LTC Encoder state ──
+enc_h=0; enc_m=0; enc_s=0; enc_f=0;
+gen_bit_pos = 0;
+gen_phase   = 0.0;
+gen_half    = 0;
+gen_out     = 1.0;
+enc_lpf     = 0.0;
+
+// ── MTC Input decoder state ──
+mtc_in_h=0; mtc_in_m=0; mtc_in_s=0; mtc_in_f=0;
+mtc_in_valid=0;
+mtc_in_timeout=0;       // samples until MTC input expires
+mtc_in_pieces=0;        // bitmask of received QF pieces (0xFF = all 8)
+mtc_in_nibbles_0=0; mtc_in_nibbles_1=0; mtc_in_nibbles_2=0; mtc_in_nibbles_3=0;
+mtc_in_nibbles_4=0; mtc_in_nibbles_5=0; mtc_in_nibbles_6=0; mtc_in_nibbles_7=0;
+mtc_in_last_piece=-1;   // last piece number received (-1 = none)
+mtc_in_det_rate=-1;     // detected MTC rate type (0-3, -1=unknown)
+mtc_in_rate_mismatch=0; // 1 if detected rate != configured fps_type
+mtc_in_got_first_full=0; // 1 after first complete 8-piece QF cycle (enables mid-cycle reports)
+
+// ── MTC Output generator state ──
+qf_tc_h=0; qf_tc_m=0; qf_tc_s=0; qf_tc_f=0;
+qf_piece           = 0;
+qf_samples_to_next = 0.0;
+qf_playing         = 0;
+qf_fps_t           = 1;
+
+// ── Active output TC ──
+out_h=0; out_m=0; out_s=0; out_f=0;
+out_valid=0; active_source=0;
+out_seq=0;
+prev_out_h=-1; prev_out_m=-1; prev_out_s=-1; prev_out_f=-1;
+src_holdoff=0;  // grace period samples before switching to lower-priority source
+
+// ── Timeline state ──
+tl_h=0; tl_m=0; tl_s=0; tl_f=0; tl_active=0;
+
+// ── GFX state ──
+gfx_alive_timeout = 0;
+gfx_alive_last_value = -1;
+gfx_alive_first = 1;
+last_mouse_cap = 0;
+settings_open = 0;
+prio_mode = 0;     // 0 = LTC > MTC, 1 = MTC > LTC
+drag_target = 0;   // settings popup drag state: 0=none 1=threshold 2=output
+
+// ── Level meters ──
+in_peak_l = 0; in_peak_r = 0;
+out_peak_l = 0; out_peak_r = 0;
+
+// Sample rate cache
+cached_srate = srate;
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════
+
+function update_params() (
+  fps_type = floor(slider10);
+  fps_int  = fps_type == 0 ? 24 : fps_type == 1 ? 25 : 30;
+  fps_real = fps_type == 0 ? 24 : fps_type == 1 ? 25 : fps_type == 2 ? 29.97 : 30;
+
+  // LTC decoder thresholds (adaptive, seeded from configured rate)
+  thr  = 10 ^ (slider11 / 20.0);
+  spb  = srate / (fps_int * 80.0);
+  bpm_period = spb;
+  mid  = bpm_period * 1.5;
+  minb = bpm_period * 0.5;
+  maxb = bpm_period * 3.0;
+
+  // LTC encoder
+  gen_phase_inc = fps_int * 80.0 * 2.0 / srate;
+  enc_amp = 10 ^ (slider12 / 20.0);
+  enc_lpf_alpha = 1.0 - exp(-2.0 * $pi * 14000.0 / srate);
+);
+
+// ── TC conversion helpers ──
+
+function tc_from_pos_ndf(pos) local(total, ts) (
+  pos = max(0, pos);
+  total = floor(pos * fps_int);
+  enc_f = total % fps_int;
+  ts    = floor(total / fps_int);
+  enc_s = ts % 60;
+  ts    = floor(ts / 60);
+  enc_m = ts % 60;
+  enc_h = floor(ts / 60) % 24;
+);
+
+function tc_from_pos_df(pos) local(total, d, mm, tf) (
+  pos = max(0, pos);
+  total = floor(pos * 30.0);
+  d     = floor(total / 17982);
+  mm    = total % 17982;
+  tf    = total + 18*d + 2*max(0, floor((mm - 2) / 1798));
+  enc_h = floor(tf / 108000) % 24;
+  enc_m = floor(tf / 1800)   % 60;
+  enc_s = floor(tf / 30)     % 60;
+  enc_f = tf % 30;
+);
+
+// Timeline TC computation (into tl_h/m/s/f)
+function tl_tc_from_pos(pos) local(total, ts, d, mm, tf) (
+  pos = max(0, pos);
+  fps_type == 2 ? (
+    total = floor(pos * 30.0);
+    d     = floor(total / 17982);
+    mm    = total % 17982;
+    tf    = total + 18*d + 2*max(0, floor((mm - 2) / 1798));
+    tl_h = floor(tf / 108000) % 24;
+    tl_m = floor(tf / 1800)   % 60;
+    tl_s = floor(tf / 30)     % 60;
+    tl_f = tf % 30;
+  ) : (
+    total = floor(pos * fps_int);
+    tl_f = total % fps_int;
+    ts   = floor(total / fps_int);
+    tl_s = ts % 60;
+    ts   = floor(ts / 60);
+    tl_m = ts % 60;
+    tl_h = floor(ts / 60) % 24;
+  );
+);
+
+// ── LTC Encoder frame builder ──
+
+function build_enc_frame() local(f_u, f_t, s_u, s_t, m_u, m_t, h_u, h_t,
+                                  sw, i, ones) (
+  i = 0; loop(80, mem[GEN_FRAME + i] = 0; i += 1;);
+  f_u = enc_f % 10; f_t = floor(enc_f / 10);
+  s_u = enc_s % 10; s_t = floor(enc_s / 10);
+  m_u = enc_m % 10; m_t = floor(enc_m / 10);
+  h_u = enc_h % 10; h_t = floor(enc_h / 10);
+  mem[GEN_FRAME+0]=(f_u>>0)&1; mem[GEN_FRAME+1]=(f_u>>1)&1;
+  mem[GEN_FRAME+2]=(f_u>>2)&1; mem[GEN_FRAME+3]=(f_u>>3)&1;
+  mem[GEN_FRAME+8]=(f_t>>0)&1; mem[GEN_FRAME+9]=(f_t>>1)&1;
+  mem[GEN_FRAME+10] = (fps_type == 2) ? 1 : 0;
+  mem[GEN_FRAME+16]=(s_u>>0)&1; mem[GEN_FRAME+17]=(s_u>>1)&1;
+  mem[GEN_FRAME+18]=(s_u>>2)&1; mem[GEN_FRAME+19]=(s_u>>3)&1;
+  mem[GEN_FRAME+24]=(s_t>>0)&1; mem[GEN_FRAME+25]=(s_t>>1)&1;
+  mem[GEN_FRAME+26]=(s_t>>2)&1;
+  mem[GEN_FRAME+32]=(m_u>>0)&1; mem[GEN_FRAME+33]=(m_u>>1)&1;
+  mem[GEN_FRAME+34]=(m_u>>2)&1; mem[GEN_FRAME+35]=(m_u>>3)&1;
+  mem[GEN_FRAME+40]=(m_t>>0)&1; mem[GEN_FRAME+41]=(m_t>>1)&1;
+  mem[GEN_FRAME+42]=(m_t>>2)&1;
+  mem[GEN_FRAME+48]=(h_u>>0)&1; mem[GEN_FRAME+49]=(h_u>>1)&1;
+  mem[GEN_FRAME+50]=(h_u>>2)&1; mem[GEN_FRAME+51]=(h_u>>3)&1;
+  mem[GEN_FRAME+56]=(h_t>>0)&1; mem[GEN_FRAME+57]=(h_t>>1)&1;
+  sw = 0xBFFC; i = 0;
+  loop(16, mem[GEN_FRAME+64+i] = (sw>>i)&1; i += 1;);
+  fps_type == 1 ? (
+    // 25fps/EBU: parity bit at position 59 (SMPTE 12M)
+    ones = 0; i = 0;
+    loop(59, ones += mem[GEN_FRAME+i]; i += 1;);
+    i = 60; loop(20, ones += mem[GEN_FRAME+i]; i += 1;);
+    mem[GEN_FRAME+59] = ones & 1;
+  ) : (
+    // All other rates: parity bit at position 27
+    ones = 0; i = 0;
+    loop(27, ones += mem[GEN_FRAME+i]; i += 1;);
+    i = 28; loop(52, ones += mem[GEN_FRAME+i]; i += 1;);
+    mem[GEN_FRAME+27] = ones & 1;
+  );
+);
+
+// ── LTC Decoder helpers ──
+
+function extract_bits(start, off, cnt) local(r, i) (
+  r = 0; i = 0;
+  loop(cnt,
+    r |= mem[BIT_BUF + ((start + off + i) & 511)] << i;
+    i += 1;
+  );
+  r
+);
+
+function check_sync() local(wl, i, bv, fs,
+                             f_u,f_t,s_u,s_t,m_u,m_t,h_u,h_t,
+                             fr, sr, mr, hr) (
+  wl = 0; i = 0;
+  loop(16,
+    bv  = mem[BIT_BUF + ((bit_idx - 16 + i) & 511)];
+    wl |= bv << i;
+    i  += 1;
+  );
+  (wl == 0x3FFD || wl == 0xBFFC) ? (
+    fs  = bit_idx - 80;
+    f_u = extract_bits(fs,  0, 4); f_t = extract_bits(fs,  8, 2);
+    s_u = extract_bits(fs, 16, 4); s_t = extract_bits(fs, 24, 3);
+    m_u = extract_bits(fs, 32, 4); m_t = extract_bits(fs, 40, 3);
+    h_u = extract_bits(fs, 48, 4); h_t = extract_bits(fs, 56, 2);
+    fr = f_t*10 + f_u; sr = s_t*10 + s_u;
+    mr = m_t*10 + m_u; hr = h_t*10 + h_u;
+    // Rate detection: extract before fps_int filter
+    fr < 30 && sr < 60 && mr < 60 && hr < 24 ? (
+      fr > ltc_det_max_f ? (ltc_det_max_f = fr);
+      ltc_det_df_seen = ltc_det_df_seen | extract_bits(fs, 10, 1);
+      ltc_det_frames += 1;
+    );
+    fr < 30 && sr < 60 && mr < 60 && hr < 24 ? (
+      ltc_h = hr; ltc_m = mr; ltc_s = sr; ltc_f = fr;
+      ltc_locked = 1;
+      ltc_dec_seq = (ltc_dec_seq + 1) & 65535;
+      ltc_valid_samples = floor(srate * 0.15);
+    );
+  );
+);
+
+function push_bit(b) (
+  mem[BIT_BUF + (bit_idx & 511)] = b;
+  bit_idx += 1;
+  bit_idx >= 80 ? check_sync();
+);
+
+// ── MTC Output helpers ──
+
+function make_qf_byte(piece) local(h, m, s, f, type_bits, nibble) (
+  h = qf_tc_h; m = qf_tc_m; s = qf_tc_s; f = qf_tc_f;
+  type_bits = qf_fps_t & 0x03;
+  nibble = (piece == 0) ? (f & 0x0F) :
+           (piece == 1) ? ((f >> 4) & 0x01) :
+           (piece == 2) ? (s & 0x0F) :
+           (piece == 3) ? ((s >> 4) & 0x03) :
+           (piece == 4) ? (m & 0x0F) :
+           (piece == 5) ? ((m >> 4) & 0x03) :
+           (piece == 6) ? (h & 0x0F) :
+                          ((type_bits << 1) | ((h >> 4) & 0x01));
+  (piece << 4) | nibble;
+);
+
+function advance_tc_frame() local(fps_i) (
+  fps_i = (qf_fps_t == 0) ? 24 : (qf_fps_t == 1) ? 25 : 30;
+  qf_tc_f += 1;
+  qf_tc_f >= fps_i ? (
+    qf_tc_f = 0;
+    qf_tc_s += 1;
+    qf_tc_s >= 60 ? (
+      qf_tc_s = 0;
+      qf_tc_m += 1;
+      qf_tc_m >= 60 ? (
+        qf_tc_m = 0;
+        qf_tc_h = (qf_tc_h + 1) % 24;
+      );
+      qf_fps_t == 2 && (qf_tc_m % 10) != 0 ? (
+        qf_tc_f = 2;
+      );
+    );
+  );
+);
+
+function tc_from_seconds_qf(pos) local(total, ts, fps_i, d, mm, tf) (
+  pos = max(0, pos);
+  fps_i = (qf_fps_t == 0) ? 24 : (qf_fps_t == 1) ? 25 : 30;
+  qf_fps_t == 2 ? (
+    total = floor(pos * 30.0);
+    d     = floor(total / 17982);
+    mm    = total % 17982;
+    tf    = total + 18*d + 2*max(0, floor((mm - 2) / 1798));
+    qf_tc_h = floor(tf / 108000) % 24;
+    qf_tc_m = floor(tf / 1800)   % 60;
+    qf_tc_s = floor(tf / 30)     % 60;
+    qf_tc_f = tf % 30;
+  ) : (
+    total   = floor(pos * fps_i);
+    qf_tc_f = total % fps_i;
+    ts      = floor(total / fps_i);
+    qf_tc_s = ts % 60;
+    ts      = floor(ts / 60);
+    qf_tc_m = ts % 60;
+    qf_tc_h = floor(ts / 60) % 24;
+  );
+);
+
+function tc_to_seconds_qf() local(fr, fps_i, total, mins_total) (
+  fr    = (qf_fps_t == 0) ? 24 : (qf_fps_t == 1) ? 25 : (qf_fps_t == 2) ? 29.97 : 30;
+  fps_i = (qf_fps_t == 0) ? 24 : (qf_fps_t == 1) ? 25 : 30;
+  qf_fps_t == 2 ? (
+    mins_total = qf_tc_h * 60 + qf_tc_m;
+    total = qf_tc_h * 108000 + qf_tc_m * 1800 + qf_tc_s * 30 + qf_tc_f;
+    total -= 2 * (mins_total - floor(mins_total / 10));
+    total / 29.97;
+  ) : (
+    total = (qf_tc_h * 3600 + qf_tc_m * 60 + qf_tc_s) * fps_i + qf_tc_f;
+    total / fr;
+  );
+);
+
+function build_ff_sysex() local(type_bits, hours_byte) (
+  type_bits  = fps_type & 0x03;
+  hours_byte = (type_bits << 5) | (out_h & 0x1F);
+  mem[FF_BUF+0] = 0xF0;
+  mem[FF_BUF+1] = 0x7F;
+  mem[FF_BUF+2] = 0x7F;
+  mem[FF_BUF+3] = 0x01;
+  mem[FF_BUF+4] = 0x01;
+  mem[FF_BUF+5] = hours_byte;
+  mem[FF_BUF+6] = out_m & 0x3F;
+  mem[FF_BUF+7] = out_s & 0x3F;
+  mem[FF_BUF+8] = out_f & 0x1F;
+  mem[FF_BUF+9] = 0xF7;
+);
+
+// ── Priority resolution ──
+// prio_mode selects LTC>MTC (0) or MTC>LTC (1). Timeline is always fallback.
+// Hysteresis: current source gets a grace period before switching to lower-priority.
+
+function resolve_active_source() local(best_src, best_pri, ltc_pri, mtc_pri, tl_pri,
+                                        cur_pri, cur_still_valid) (
+  best_src = SRC_NONE;
+  best_pri = 99;
+
+  // Derive priorities from prio_mode
+  prio_mode > 0.5 ? (
+    ltc_pri = 1; mtc_pri = 0;  // MTC > LTC
+  ) : (
+    ltc_pri = 0; mtc_pri = 1;  // LTC > MTC
+  );
+  tl_pri = 2;  // Timeline always fallback
+
+  // LTC Input
+  slider1 > 0.5 && ltc_locked ? (
+    ltc_pri < best_pri ? (best_src = SRC_LTC; best_pri = ltc_pri;);
+  );
+
+  // MTC Input
+  slider3 > 0.5 && mtc_in_valid ? (
+    mtc_pri < best_pri ? (best_src = SRC_MTC; best_pri = mtc_pri;);
+  );
+
+  // Timeline
+  slider5 > 0.5 && tl_active ? (
+    tl_pri < best_pri ? (best_src = SRC_TIMELINE; best_pri = tl_pri;);
+  );
+
+  // Hysteresis: if current source lost lock but grace period hasn't expired,
+  // only switch to an equal-or-higher priority source, not to a lower one.
+  active_source != SRC_NONE && best_src != active_source ? (
+    // Get priority of current active source
+    cur_pri = active_source == SRC_LTC ? ltc_pri :
+              active_source == SRC_MTC ? mtc_pri : tl_pri;
+    // Check if current source still has signal
+    cur_still_valid = active_source == SRC_LTC ? (slider1 > 0.5 && ltc_locked) :
+                      active_source == SRC_MTC ? (slider3 > 0.5 && mtc_in_valid) :
+                                                 (slider5 > 0.5 && tl_active);
+    // If current source lost lock, only switch to higher priority (lower number)
+    !cur_still_valid && best_pri >= cur_pri ? (
+      // Grace period: keep current source during holdoff
+      src_holdoff > 0 ? (
+        best_src = active_source;
+      ) : (
+        // Grace expired, allow switch
+        best_src = best_src;
+      );
+    );
+  );
+
+  // Reset holdoff when source actually changes
+  best_src != active_source ? (
+    src_holdoff = floor(srate * 0.5);  // 500ms grace for next time
+  );
+
+  active_source = best_src;
+
+  active_source == SRC_LTC ? (
+    out_h = ltc_h; out_m = ltc_m; out_s = ltc_s; out_f = ltc_f;
+    out_valid = 1;
+  ) : active_source == SRC_MTC ? (
+    out_h = mtc_in_h; out_m = mtc_in_m; out_s = mtc_in_s; out_f = mtc_in_f;
+    out_valid = 1;
+  ) : active_source == SRC_TIMELINE ? (
+    out_h = tl_h; out_m = tl_m; out_s = tl_s; out_f = tl_f;
+    out_valid = 1;
+  ) : (
+    out_valid = 0;
+  );
+);
+
+
+// ── TC Offset ──
+// Converts h:m:s:f to total frames, adds/subtracts offset, wraps at 24h, converts back.
+// Result is stored in out_h/out_m/out_s/out_f (in-place).
+function apply_tc_offset() local(off_h, off_m, off_s, off_f, off_sign,
+                                   total, off_total, max_frames,
+                                   d, mm, tf, ts) (
+  off_h    = floor(gmem[TC_OFFSET_H]);
+  off_m    = floor(gmem[TC_OFFSET_M]);
+  off_s    = floor(gmem[TC_OFFSET_S]);
+  off_f    = floor(gmem[TC_OFFSET_F]);
+  off_sign = floor(gmem[TC_OFFSET_SIGN]);
+
+  // Fast path: no offset
+  (off_h + off_m + off_s + off_f == 0) ? (
+    0; // do nothing
+  ) : (
+    fps_type == 2 ? (
+      // Drop-frame: convert to true frame count (excluding dropped frames)
+      // TC → total frames for DF: total = h*108000 + m*1800 + s*30 + f - dropcount
+      // dropcount = 2 * (minutes_total - floor(minutes_total / 10))
+      total = out_h * 108000 + out_m * 1800 + out_s * 30 + out_f;
+      total -= 2 * (out_h * 60 + out_m - floor((out_h * 60 + out_m) / 10));
+
+      off_total = off_h * 108000 + off_m * 1800 + off_s * 30 + off_f;
+      off_total -= 2 * (off_h * 60 + off_m - floor((off_h * 60 + off_m) / 10));
+
+      off_sign ? (total -= off_total) : (total += off_total);
+
+      // 24h boundary in DF: 24 * 60 * 29.97 = 24 * 107892 / 60... use exact:
+      // max frames in 24h DF = 24*60*30 - 24*6*2 = 43200*30 - 288 = 2589408 - ... nah
+      // Actually: 24h of 29.97DF = 2589408 frames
+      // 24*108000 - 2*(24*60 - 24*6) = 2592000 - 2*(1440-144) = 2592000 - 2592 = 2589408
+      max_frames = 2589408;
+      total < 0 ? total += max_frames;
+      total >= max_frames ? total -= max_frames;
+
+      // Convert back: same algorithm as tl_tc_from_pos but from frame count
+      // We have true frame count, need to find h:m:s:f in DF notation
+      // Reverse: add back dropped frames
+      d  = floor(total / 17982);
+      mm = total % 17982;
+      tf = total + 18*d + 2*max(0, floor((mm - 2) / 1798));
+      out_h = floor(tf / 108000) % 24;
+      out_m = floor(tf / 1800)   % 60;
+      out_s = floor(tf / 30)     % 60;
+      out_f = tf % 30;
+    ) : (
+      // Non-drop: straightforward
+      total = ((out_h * 60 + out_m) * 60 + out_s) * fps_int + out_f;
+      off_total = ((off_h * 60 + off_m) * 60 + off_s) * fps_int + off_f;
+
+      off_sign ? (total -= off_total) : (total += off_total);
+
+      max_frames = 24 * 3600 * fps_int;
+      total < 0 ? total += max_frames;
+      total >= max_frames ? total -= max_frames;
+
+      out_f = total % fps_int;
+      ts    = floor(total / fps_int);
+      out_s = ts % 60;
+      ts    = floor(ts / 60);
+      out_m = ts % 60;
+      out_h = floor(ts / 60) % 24;
+    );
+  );
+);
+
+
+// ── MTC Input processing ──
+
+function process_mtc_qf(data_byte) local(piece, nibble, mid_f, mid_s, det_fps) (
+  piece  = (data_byte >> 4) & 0x07;
+  nibble =  data_byte & 0x0F;
+
+  // Check sequence continuity: expect pieces 0,1,2,...,7 in order
+  // If we get piece 0, always start fresh
+  piece == 0 ? (
+    mtc_in_pieces = 0;
+    mtc_in_last_piece = -1;
+  ) : (
+    // If not consecutive, reset
+    piece != mtc_in_last_piece + 1 ? (
+      mtc_in_pieces = 0;
+      mtc_in_last_piece = -1;
+      // Don't process this out-of-order piece
+    );
+  );
+
+  // Store nibble
+  piece == 0 ? (mtc_in_nibbles_0 = nibble;) :
+  piece == 1 ? (mtc_in_nibbles_1 = nibble;) :
+  piece == 2 ? (mtc_in_nibbles_2 = nibble;) :
+  piece == 3 ? (mtc_in_nibbles_3 = nibble;) :
+  piece == 4 ? (mtc_in_nibbles_4 = nibble;) :
+  piece == 5 ? (mtc_in_nibbles_5 = nibble;) :
+  piece == 6 ? (mtc_in_nibbles_6 = nibble;) :
+  piece == 7 ? (mtc_in_nibbles_7 = nibble;);
+
+  mtc_in_pieces |= (1 << piece);
+  mtc_in_last_piece = piece;
+
+  // ── Mid-cycle report at piece 3 ──
+  // After pieces 0-3, assemble frames + seconds from current nibbles and
+  // keep hours + minutes from the previous full-cycle assembly. This gives
+  // one TC update per actual frame instead of one per two frames.
+  piece == 3 && (mtc_in_pieces & 0x0F) == 0x0F && mtc_in_got_first_full ? (
+    mid_f = mtc_in_nibbles_0 | ((mtc_in_nibbles_1 & 0x01) << 4);
+    mid_s = mtc_in_nibbles_2 | ((mtc_in_nibbles_3 & 0x03) << 4);
+    mtc_in_f = mid_f;
+    mtc_in_s = mid_s;
+    // Minutes rollover: when seconds + frames roll to 0, the minutes nibbles
+    // (pieces 4-5) haven't arrived yet and still hold the previous value.
+    mid_s == 0 && (mid_f == 0 || (mid_f == 2 && mtc_in_det_rate == 2)) ? (
+      mtc_in_m += 1;
+      mtc_in_m >= 60 ? (
+        mtc_in_m = 0;
+        mtc_in_h = (mtc_in_h + 1) % 24;
+      );
+    );
+    mtc_in_valid = 1;
+    mtc_in_timeout = floor(srate * 0.15);
+  );
+
+  // ── Full assembly at piece 7 ──
+  // All 8 pieces received — assemble complete TC and apply frame compensation.
+  mtc_in_pieces == 0xFF ? (
+    mtc_in_f = mtc_in_nibbles_0 | ((mtc_in_nibbles_1 & 0x01) << 4);
+    mtc_in_s = mtc_in_nibbles_2 | ((mtc_in_nibbles_3 & 0x03) << 4);
+    mtc_in_m = mtc_in_nibbles_4 | ((mtc_in_nibbles_5 & 0x03) << 4);
+    mtc_in_h = mtc_in_nibbles_6 | ((mtc_in_nibbles_7 & 0x01) << 4);
+    mtc_in_det_rate = (mtc_in_nibbles_7 >> 1) & 0x03;
+    mtc_in_rate_mismatch = (mtc_in_det_rate != fps_type) ? 1 : 0;
+    // Frame compensation: a complete QF cycle spans 2 frames, so the
+    // assembled value lags by 1 frame. Increment to show current time.
+    det_fps = mtc_in_det_rate == 0 ? 24 : mtc_in_det_rate == 1 ? 25 : 30;
+    mtc_in_f += 1;
+    mtc_in_f >= det_fps ? (
+      mtc_in_f = 0;
+      mtc_in_s += 1;
+      mtc_in_s >= 60 ? (
+        mtc_in_s = 0;
+        mtc_in_m += 1;
+        mtc_in_m >= 60 ? (
+          mtc_in_m = 0;
+          mtc_in_h = (mtc_in_h + 1) % 24;
+        );
+        // Drop-frame: skip frames 0 and 1 at non-10th minutes
+        mtc_in_det_rate == 2 && (mtc_in_m % 10) != 0 ? (
+          mtc_in_f = 2;
+        );
+      );
+    );
+    mtc_in_valid = 1;
+    mtc_in_got_first_full = 1;
+    mtc_in_timeout = floor(srate * 0.15);
+    mtc_in_pieces = 0;
+    mtc_in_last_piece = -1;
+  );
+);
+
+// ── MTC Full Frame SysEx input ──
+// Decodes F0 7F 7F 01 01 hh mm ss ff F7 for instant locate without
+// waiting for a full quarter-frame cycle.
+function process_mtc_fullframe() local(hh_byte) (
+  hh_byte = mem[MIDI_IN_BUF + 5];
+  mtc_in_h = hh_byte & 0x1F;
+  mtc_in_m = mem[MIDI_IN_BUF + 6] & 0x3F;
+  mtc_in_s = mem[MIDI_IN_BUF + 7] & 0x3F;
+  mtc_in_f = mem[MIDI_IN_BUF + 8] & 0x1F;
+  mtc_in_det_rate = (hh_byte >> 5) & 0x03;
+  mtc_in_rate_mismatch = (mtc_in_det_rate != fps_type) ? 1 : 0;
+  mtc_in_valid = 1;
+  mtc_in_got_first_full = 1;
+  mtc_in_timeout = floor(srate * 0.15);
+  // Reset QF state for clean start of next QF stream
+  mtc_in_pieces = 0;
+  mtc_in_last_piece = -1;
+);
+
+
+// ── Initialise ──
+update_params();
+build_enc_frame();
+
+gmem[TC_HOUR] = 0; gmem[TC_MIN] = 0; gmem[TC_SEC] = 0; gmem[TC_FRAME] = 0;
+gmem[TC_FRAMERATE] = fps_type; gmem[TC_PLAY_STATE] = 0;
+gmem[TC_VALID] = 0; gmem[TC_WRITE_COUNTER] = 0;
+gmem[ACTIVE_SOURCE] = 0; gmem[LTC_LOCK_STATUS] = 0; gmem[MTC_LOCK_STATUS] = 0;
+
+
+@serialize
+
+file_var(0, prio_mode);
+
+
+@slider
+
+update_params();
+
+
+@block
+
+// Detect sample rate changes
+srate != cached_srate ? (
+  cached_srate = srate;
+  update_params();
+);
+
+is_playing = (play_state & 1) ? 1 : 0;
+
+// ═══════════════════════════════════════════════════════════════════════
+// SOURCE PROCESSING
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── 1. Timeline source ──
+tl_active = is_playing;
+tl_active ? (
+  tl_tc_from_pos(play_position);
+);
+
+// ── 2. LTC lock expiry ──
+ltc_valid_samples > 0 ? (
+  ltc_valid_samples -= samplesblock;
+  ltc_valid_samples <= 0 ? (ltc_valid_samples = 0; ltc_locked = 0;);
+);
+
+// ── 3. MTC Input timeout ──
+mtc_in_timeout > 0 ? (
+  mtc_in_timeout -= samplesblock;
+  mtc_in_timeout <= 0 ? (mtc_in_timeout = 0; mtc_in_valid = 0;);
+);
+
+// ── 4. MTC Input: always consume MIDI (toggle only affects source selection) ──
+// Uses midirecv_buf() to handle both regular MIDI and SysEx (Full Frame).
+while(midi_len = midirecv_buf(midi_off, MIDI_IN_BUF, 32)) (
+  midi_b0 = mem[MIDI_IN_BUF];
+  // MTC Quarter Frame (F1 xx)
+  midi_b0 == 0xF1 && midi_len >= 2 ? (
+    process_mtc_qf(mem[MIDI_IN_BUF + 1]);
+  )
+  // MTC Full Frame SysEx (F0 7F 7F 01 01 hh mm ss ff F7)
+  : midi_b0 == 0xF0 && midi_len == 10 &&
+    mem[MIDI_IN_BUF+1] == 0x7F && mem[MIDI_IN_BUF+2] == 0x7F &&
+    mem[MIDI_IN_BUF+3] == 0x01 && mem[MIDI_IN_BUF+4] == 0x01 &&
+    mem[MIDI_IN_BUF+9] == 0xF7 ? (
+    process_mtc_fullframe();
+  )
+  // Pass through everything else
+  : (
+    midisend_buf(midi_off, MIDI_IN_BUF, midi_len);
+  );
+);
+
+// ── 5. LTC rate detection (2-second window) ──
+ltc_locked ? (
+  ltc_det_window <= 0 ? (ltc_det_window = floor(srate * 2.0));
+  ltc_det_window -= samplesblock;
+  ltc_det_window <= 0 ? (
+    ltc_det_frames >= 10 ? (
+      ltc_det_df_seen ? (
+        ltc_det_rate = 2;
+      ) : ltc_det_max_f >= 25 ? (
+        ltc_det_rate = 3;
+      ) : ltc_det_max_f >= 24 ? (
+        ltc_det_rate = 1;
+      ) : (
+        ltc_det_rate = 0;
+      );
+      ltc_rate_mismatch = (ltc_det_rate >= 0 && ltc_det_rate != fps_type) ? 1 : 0;
+    );
+    ltc_det_max_f = 0;
+    ltc_det_df_seen = 0;
+    ltc_det_frames = 0;
+    ltc_det_window = floor(srate * 2.0);
+  );
+) : (
+  ltc_det_rate = -1;
+  ltc_rate_mismatch = 0;
+  ltc_det_max_f = 0;
+  ltc_det_df_seen = 0;
+  ltc_det_frames = 0;
+  ltc_det_window = 0;
+);
+
+// ═══════════════════════════════════════════════════════════════════════
+// PRIORITY RESOLUTION
+// ═══════════════════════════════════════════════════════════════════════
+
+// Holdoff countdown for source hysteresis
+src_holdoff > 0 ? (
+  src_holdoff -= samplesblock;
+  src_holdoff < 0 ? src_holdoff = 0;
+);
+
+resolve_active_source();
+
+// Apply TC offset (before any output: gmem, LTC encoder, MTC, sliders)
+out_valid ? apply_tc_offset();
+
+// Set encoder TC from active source (for LTC output)
+out_valid ? (
+  enc_h = out_h; enc_m = out_m; enc_s = out_s; enc_f = out_f;
+);
+
+// Sequence counter: increment when TC changes
+(out_h != prev_out_h || out_m != prev_out_m || out_s != prev_out_s || out_f != prev_out_f) ? (
+  out_seq = (out_seq + 1) & 65535;
+  prev_out_h = out_h; prev_out_m = out_m; prev_out_s = out_s; prev_out_f = out_f;
+);
+
+// ═══════════════════════════════════════════════════════════════════════
+// MTC OUTPUT
+// ═══════════════════════════════════════════════════════════════════════
+
+slider8 > 0.5 && out_valid ? (
+  qf_fps_t = fps_type;
+  qf_interval = srate / (fps_real * 4.0);
+
+  // Stopped → playing transition: resync
+  is_playing && !qf_playing ? (
+    qf_tc_h = out_h; qf_tc_m = out_m; qf_tc_s = out_s; qf_tc_f = out_f;
+    qf_piece = 0;
+    qf_samples_to_next = 0;
+    // Send full-frame SysEx for instant locate
+    build_ff_sysex();
+    midisend_buf(0, FF_BUF, 10);
+  );
+  qf_playing = is_playing;
+
+  // QF message loop (only when playing)
+  is_playing ? (
+    loop(32,
+      qf_samples_to_next <= samplesblock ? (
+        midisend(max(0, min(samplesblock - 1, floor(qf_samples_to_next))),
+                 0xF1, make_qf_byte(qf_piece), 0);
+        qf_samples_to_next += qf_interval;
+        qf_piece += 1;
+        qf_piece >= 8 ? (
+          qf_piece = 0;
+          advance_tc_frame();
+        );
+      );
+    );
+
+    qf_samples_to_next -= samplesblock;
+    qf_samples_to_next < 0 ? qf_samples_to_next = 0;
+
+    // Drift correction: only resync at QF piece 0 boundary to avoid
+    // breaking the 0-7 quarter-frame sequence mid-stream (which causes
+    // ERR frames in MTC receivers).
+    qf_piece == 0 ? (
+      mtc_expected = tc_to_seconds_qf();
+      // Use active TC position for drift reference
+      active_source == SRC_TIMELINE ? (
+        abs(play_position - mtc_expected) > (2.0 / fps_real) ? (
+          tc_from_seconds_qf(play_position);
+          qf_samples_to_next = 0;
+        );
+      );
+    );
+  );
+) : (
+  // MTC output disabled or no valid TC — reset state
+  qf_playing = 0;
+);
+
+// ═══════════════════════════════════════════════════════════════════════
+// GMEM / SLIDER OUTPUT
+// ═══════════════════════════════════════════════════════════════════════
+
+// Script output (gmem)
+slider9 > 0.5 ? (
+  gmem[TC_HOUR]          = out_h;
+  gmem[TC_MIN]           = out_m;
+  gmem[TC_SEC]           = out_s;
+  gmem[TC_FRAME]         = out_f;
+  gmem[TC_FRAMERATE]     = fps_type;
+  gmem[TC_PLAY_STATE]    = is_playing;
+  gmem[TC_VALID]         = out_valid;
+  gmem[TC_WRITE_COUNTER] = (gmem[TC_WRITE_COUNTER] + 1) & 65535;
+  gmem[ACTIVE_SOURCE]    = active_source;
+  gmem[LTC_LOCK_STATUS]  = ltc_locked;
+  gmem[MTC_LOCK_STATUS]  = mtc_in_valid;
+);
+
+// Mirror to sliders for display
+slider13=out_h; slider14=out_m; slider15=out_s; slider16=out_f;
+slider17=out_valid; slider18=out_seq; slider19=active_source;
+slider20=peak_level; slider21=ltc_locked; slider22=mtc_in_valid;
+slider23=tl_active;
+sliderchange(0x7FF800);  // bits 11-22 (sliders 12-23, but we want 13-23)
+
+// Peak decay (~10 dB/s)
+meter_decay = exp(log(0.316) * samplesblock / srate);
+peak_level *= meter_decay;
+in_peak_l *= meter_decay; in_peak_r *= meter_decay;
+out_peak_l *= meter_decay; out_peak_r *= meter_decay;
+
+
+@sample
+
+// ── Input level metering (ch1+2) ──
+abs(spl0) > in_peak_l ? in_peak_l = abs(spl0);
+abs(spl1) > in_peak_r ? in_peak_r = abs(spl1);
+
+// ═══════════════════════════════════════════════════════════════════════
+// LTC DECODER (always runs — toggle only affects source selection)
+// Scans all input channels and uses the strongest signal for decoding.
+// ═══════════════════════════════════════════════════════════════════════
+
+// Find strongest signal across all input channels
+best_s = 0;
+best_abs = 0;
+ch = 0;
+loop(num_ch,
+  cs = spl(ch);
+  acs = abs(cs);
+  acs > best_abs ? (best_s = cs; best_abs = acs;);
+  ch += 1;
+);
+s = best_s;
+abs_s = best_abs;
+(abs_s > peak_level) ? (peak_level = abs_s);
+
+ns = s > thr ? 1 : s < -thr ? -1 : 0;
+ns != 0 && ns != sig_state ? (
+  sig_state = ns;
+  gap = stt; stt = 0;
+  gap < minb ? (
+    // Noise rejection — too short
+    bpm_state = 0;
+  ) : gap < mid ? (
+    // Short pulse (bit '1' half)
+    bpm_period = (bpm_period * 3.0 + gap) / 4.0;
+    mid  = bpm_period * 1.5;
+    minb = bpm_period * 0.5;
+    maxb = bpm_period * 3.0;
+    bpm_state == 0 ? bpm_state = 1 : (push_bit(1); bpm_state = 0;);
+  ) : gap < maxb ? (
+    // Long pulse (bit '0')
+    bpm_period = (bpm_period * 3.0 + gap * 0.5) / 4.0;
+    mid  = bpm_period * 1.5;
+    minb = bpm_period * 0.5;
+    maxb = bpm_period * 3.0;
+    bpm_state == 0 ? push_bit(0) : (push_bit(1); push_bit(0); bpm_state = 0;);
+  ) : (
+    // Dropout — re-seed from configured rate
+    bpm_period = spb;
+    mid  = bpm_period * 1.5;
+    minb = bpm_period * 0.5;
+    maxb = bpm_period * 3.0;
+    bpm_state = 0;
+  );
+) : (stt += 1;);
+
+// ═══════════════════════════════════════════════════════════════════════
+// LTC ENCODER (generates audio when LTC Output enabled + playing)
+// ═══════════════════════════════════════════════════════════════════════
+
+slider7 > 0.5 && (play_state & 1) && out_valid ? (
+  gen_phase += gen_phase_inc;
+  gen_phase >= 1.0 ? (
+    gen_phase -= 1.0;
+    gen_half == 0 ? (
+      gen_half = 1;
+      mem[GEN_FRAME + gen_bit_pos] ? (gen_out = -gen_out;);
+    ) : (
+      gen_half = 0;
+      gen_out  = -gen_out;
+      gen_bit_pos = (gen_bit_pos + 1) % 80;
+      gen_bit_pos == 0 ? build_enc_frame();
+    );
+  );
+  enc_lpf += enc_lpf_alpha * (gen_out * enc_amp - enc_lpf);
+  spl0 = enc_lpf;
+  spl1 = enc_lpf;
+) : slider7 > 0.5 ? (
+  // LTC Output enabled but not playing or no valid TC: mute
+  enc_lpf = 0.0;
+  spl0 = 0;
+  spl1 = 0;
+);
+
+// ── Output level metering (ch1+2) ──
+abs(spl0) > out_peak_l ? out_peak_l = abs(spl0);
+abs(spl1) > out_peak_r ? out_peak_r = abs(spl1);
+
+
+@gfx 640 320
+
+// ═══════════════════════════════════════════════════════════════════════
+// GFX UI — Responsive layout
+//   tiny    (gfx_w < 160): TC display only
+//   compact (160..449):    title + TC + info bar
+//   full    (>= 450):     + sources/outputs columns
+// ═══════════════════════════════════════════════════════════════════════
+
+// Script-alive computation
+current_alive = gmem[SCRIPT_ALIVE];
+gfx_alive_first ? (
+  gfx_alive_first = 0;
+) : (
+  current_alive != gfx_alive_last_value ? (
+    gfx_alive_timeout = time_precise() + 3.0;
+  );
+);
+gfx_alive_last_value = current_alive;
+script_running = time_precise() < gfx_alive_timeout;
+
+// Mouse click detection
+mouse_click = (mouse_cap & 1) && !(last_mouse_cap & 1);
+
+// Clear drag target on mouse release
+!(mouse_cap & 1) ? drag_target = 0;
+
+// Layout modes (also require minimum height for full mode)
+tiny_mode    = gfx_w < 160;
+compact_mode = gfx_w < 450 || gfx_h < 255;
+full_mode    = gfx_w >= 450 && gfx_h >= 255;
+
+// Background
+gfx_r=0.06; gfx_g=0.06; gfx_b=0.09; gfx_a=1;
+gfx_rect(0, 0, gfx_w, gfx_h, 1);
+
+// ── Panel ──
+pad = tiny_mode ? 2 : 10;
+panel_x = pad; panel_y = pad;
+panel_w = gfx_w - pad*2;
+panel_h = gfx_h - pad*2;
+
+// Panel bg
+gfx_r=0.10; gfx_g=0.11; gfx_b=0.15; gfx_a=1;
+gfx_rect(panel_x, panel_y, panel_w, panel_h, 1);
+// Panel border (skip in tiny mode)
+!tiny_mode ? (
+  gfx_r=0.20; gfx_g=0.22; gfx_b=0.30;
+  gfx_rect(panel_x, panel_y, panel_w, 1, 1);
+  gfx_rect(panel_x, panel_y+panel_h-1, panel_w, 1, 1);
+  gfx_rect(panel_x, panel_y, 1, panel_h, 1);
+  gfx_rect(panel_x+panel_w-1, panel_y, 1, panel_h, 1);
+);
+
+// ═════════════════════════════════════════════════════════════════════
+// ZONE A: Top section
+// ═════════════════════════════════════════════════════════════════════
+
+// Title + version (hidden in tiny mode)
+!tiny_mode ? (
+  gfx_setfont(1, "Arial", 11, 'b');
+  gfx_r=0.45; gfx_g=0.50; gfx_b=0.62;
+  gfx_x = panel_x + 10; gfx_y = panel_y + 6;
+  gfx_drawstr("ReaTC Converter");
+
+  gfx_setfont(1, "Arial", 9, 0);
+  gfx_r=0.35; gfx_g=0.37; gfx_b=0.42;
+  strcpy(#ver_str, "v{{VERSION}}");
+  gfx_measurestr(#ver_str, verw, verh);
+  gfx_x = panel_x + panel_w - verw - 10;
+  gfx_y = panel_y + 8;
+  gfx_drawstr(#ver_str);
+);
+
+// ── TC display area ──
+tiny_mode ? (
+  tc_area_y = panel_y + 2;
+  tc_area_h = panel_h - 4;
+) : full_mode ? (
+  zone_b_need = 168;
+  tc_area_y = panel_y + 24;
+  tc_area_h = panel_h - 24 - 22 - zone_b_need;
+  tc_area_h < 40 ? tc_area_h = 40;
+) : (
+  tc_area_y = panel_y + 24;
+  tc_area_h = panel_h - 50;
+);
+
+// TC color based on active source
+active_source == SRC_LTC ? (
+  gfx_r=0.20; gfx_g=0.88; gfx_b=0.38;
+) : active_source == SRC_MTC ? (
+  gfx_r=0.40; gfx_g=0.70; gfx_b=0.95;
+) : active_source == SRC_TIMELINE ? (
+  is_playing ? (
+    gfx_r=0.20; gfx_g=0.88; gfx_b=0.38;
+  ) : (
+    gfx_r=0.88; gfx_g=0.20; gfx_b=0.20;
+  );
+) : (
+  gfx_r=0.42; gfx_g=0.44; gfx_b=0.52;
+);
+
+// Save TC color for later
+tc_cr = gfx_r; tc_cg = gfx_g; tc_cb = gfx_b;
+
+// Offset indicator above TC (skip in tiny mode)
+offset_active = (gmem[TC_OFFSET_H] + gmem[TC_OFFSET_M] + gmem[TC_OFFSET_S] + gmem[TC_OFFSET_F] > 0);
+tc_nudge = 0;
+!tiny_mode && offset_active ? (
+  gfx_setfont(1, "Arial", 11, 0);
+  gmem[TC_OFFSET_SIGN] ? strcpy(#off_sign2, "-") : strcpy(#off_sign2, "+");
+  sprintf(#off_top, "OFFSET %s%02d:%02d:%02d:%02d",
+    #off_sign2,
+    floor(gmem[TC_OFFSET_H]), floor(gmem[TC_OFFSET_M]),
+    floor(gmem[TC_OFFSET_S]), floor(gmem[TC_OFFSET_F]));
+  gfx_r=0.95; gfx_g=0.65; gfx_b=0.15;
+  gfx_measurestr(#off_top, off_top_w, off_top_h);
+  gfx_x = panel_x + (panel_w - off_top_w) / 2;
+  gfx_y = tc_area_y + 2;
+  gfx_drawstr(#off_top);
+  tc_nudge = off_top_h + 2;
+);
+
+// Restore TC color
+gfx_r = tc_cr; gfx_g = tc_cg; gfx_b = tc_cb;
+
+fps_type == 2 ? (
+  sprintf(#tc_str, "%02d:%02d:%02d;%02d", out_h, out_m, out_s, out_f);
+) : (
+  sprintf(#tc_str, "%02d:%02d:%02d:%02d", out_h, out_m, out_s, out_f);
+);
+
+// Dynamic font sizing
+tc_avail_w = panel_w - (tiny_mode ? 4 : 24);
+tc_font = floor(tc_avail_w / 7);
+tc_font_h = floor(tc_area_h * 0.75);
+tc_font = min(tc_font, tc_font_h);
+tc_font < 10 ? tc_font = 10;
+
+gfx_setfont(1, "Courier New", tc_font, 'b');
+gfx_measurestr(#tc_str, tcw, tch);
+gfx_x = panel_x + (panel_w - tcw) / 2;
+gfx_y = tc_area_y + tc_nudge + (tc_area_h - tc_nudge - tch) / 2;
+gfx_drawstr(#tc_str);
+
+// ── Info bar (hidden in tiny mode) ──
+!tiny_mode ? (
+  info_y = tc_area_y + tc_area_h + 2;
+
+  // FPS label (left)
+  gfx_setfont(1, "Arial", 11, 0);
+  fps_type == 0 ? strcpy(#fps_str, "24fps") :
+  fps_type == 1 ? strcpy(#fps_str, "25fps") :
+  fps_type == 2 ? strcpy(#fps_str, "29.97DF") :
+                  strcpy(#fps_str, "30fps");
+  gfx_r=0.45; gfx_g=0.50; gfx_b=0.62;
+  gfx_x = panel_x + 10; gfx_y = info_y;
+  gfx_drawstr(#fps_str);
+
+  // Active source label (centered)
+  gfx_setfont(1, "Arial", 11, 0);
+  active_source == SRC_LTC ? (
+    ltc_rate_mismatch ? (
+      strcpy(#src_prefix, "WRONG RATE: ");
+      ltc_det_rate == 0 ? strcpy(#src_name, "LTC (24fps!)") :
+      ltc_det_rate == 1 ? strcpy(#src_name, "LTC (25fps!)") :
+      ltc_det_rate == 2 ? strcpy(#src_name, "LTC (29.97DF!)") :
+                          strcpy(#src_name, "LTC (30fps!)");
+      src_cr=0.95; src_cg=0.55; src_cb=0.20;
+    ) : (
+      strcpy(#src_prefix, "ACTIVE SOURCE: ");
+      strcpy(#src_name, "LTC");
+      src_cr=0.20; src_cg=0.88; src_cb=0.38;
+    );
+  ) : active_source == SRC_MTC ? (
+    mtc_in_rate_mismatch ? (
+      strcpy(#src_prefix, "WRONG RATE: ");
+      mtc_in_det_rate == 0 ? strcpy(#src_name, "MTC (24fps!)") :
+      mtc_in_det_rate == 1 ? strcpy(#src_name, "MTC (25fps!)") :
+      mtc_in_det_rate == 2 ? strcpy(#src_name, "MTC (29.97DF!)") :
+                             strcpy(#src_name, "MTC (30fps!)");
+      src_cr=0.95; src_cg=0.55; src_cb=0.20;
+    ) : (
+      strcpy(#src_prefix, "ACTIVE SOURCE: ");
+      strcpy(#src_name, "MTC");
+      src_cr=0.40; src_cg=0.70; src_cb=0.95;
+    );
+  ) : active_source == SRC_TIMELINE ? (
+    strcpy(#src_prefix, "ACTIVE SOURCE: ");
+    strcpy(#src_name, "REAPER Timeline");
+    src_cr=0.75; src_cg=0.78; src_cb=0.85;
+  ) : (
+    strcpy(#src_prefix, "");
+    strcpy(#src_name, "No active source");
+    src_cr=0.42; src_cg=0.44; src_cb=0.52;
+  );
+
+  // Gear icon position (computed first for centering)
+  gear_x = panel_x + panel_w - 28;
+
+  // Measure fps label width for centering region
+  gfx_setfont(1, "Arial", 11, 0);
+  gfx_measurestr(#fps_str, fps_w, fps_h);
+  src_center_l = panel_x + 10 + fps_w + 8;
+  src_center_r = gear_x - 4;
+  src_center_w = src_center_r - src_center_l;
+
+  // Measure active source text
+  strlen(#src_prefix) > 0 ? (
+    gfx_setfont(1, "Arial", 11, 0);
+    gfx_measurestr(#src_prefix, pfx_w, pfx_h);
+  ) : (
+    pfx_w = 0;
+  );
+  gfx_setfont(1, "Arial", 11, 'b');
+  gfx_measurestr(#src_name, nm_w, nm_h);
+  src_total_w = pfx_w + nm_w;
+  src_label_x = src_center_l + (src_center_w - src_total_w) / 2;
+
+  // Draw prefix (if any)
+  pfx_w > 0 ? (
+    gfx_setfont(1, "Arial", 11, 0);
+    gfx_r=0.55; gfx_g=0.58; gfx_b=0.68;
+    gfx_x = src_label_x; gfx_y = info_y;
+    gfx_drawstr(#src_prefix);
+  );
+
+  // Draw source name (bold)
+  gfx_setfont(1, "Arial", 11, 'b');
+  gfx_r=src_cr; gfx_g=src_cg; gfx_b=src_cb;
+  gfx_x = src_label_x + pfx_w; gfx_y = info_y;
+  gfx_drawstr(#src_name);
+
+  // Gear icon (right side — position already computed above)
+  gear_y = info_y + 1;
+  gear_sz = 14;
+  gear_cx = gear_x + gear_sz / 2;
+  gear_cy = gear_y + gear_sz / 2;
+
+  gfx_r=0.50; gfx_g=0.52; gfx_b=0.60;
+  gfx_rect(gear_cx - 4, gear_cy - 4, 8, 8, 1);
+  gfx_rect(gear_cx - 2, gear_cy - 7, 4, 3, 1);
+  gfx_rect(gear_cx - 2, gear_cy + 4, 4, 3, 1);
+  gfx_rect(gear_cx - 7, gear_cy - 2, 3, 4, 1);
+  gfx_rect(gear_cx + 4, gear_cy - 2, 3, 4, 1);
+  gfx_r=0.10; gfx_g=0.11; gfx_b=0.15;
+  gfx_rect(gear_cx - 2, gear_cy - 2, 4, 4, 1);
+
+  !settings_open && mouse_click &&
+    mouse_x >= gear_x && mouse_x < gear_x + gear_sz &&
+    mouse_y >= gear_y && mouse_y < gear_y + gear_sz ? (
+    settings_open = 1;
+    mouse_click = 0;
+  );
+); // end !tiny_mode
+
+// ═════════════════════════════════════════════════════════════════════
+// ZONE B: Sources/Outputs columns (full mode only)
+// ═════════════════════════════════════════════════════════════════════
+
+full_mode ? (
+
+// Divider
+div_y = info_y + 18;
+gfx_r=0.20; gfx_g=0.22; gfx_b=0.30;
+gfx_rect(panel_x + 1, div_y, panel_w - 2, 1, 1);
+
+zone_b_y = div_y + 2;
+zone_b_h = panel_y + panel_h - zone_b_y - 1;
+
+// Left column (Sources) — green tint
+src_col_x = panel_x + 1;
+src_col_w = floor((panel_w - 2) / 2);
+gfx_r=0.08; gfx_g=0.12; gfx_b=0.09; gfx_a=1;
+gfx_rect(src_col_x, zone_b_y, src_col_w, zone_b_h, 1);
+
+// Right column (Outputs) — maroon tint
+out_col_x = src_col_x + src_col_w;
+out_col_w = panel_w - 2 - src_col_w;
+gfx_r=0.12; gfx_g=0.08; gfx_b=0.08; gfx_a=1;
+gfx_rect(out_col_x, zone_b_y, out_col_w, zone_b_h, 1);
+
+// ── SOURCES header ──
+gfx_setfont(1, "Arial", 10, 'b');
+gfx_r=0.50; gfx_g=0.55; gfx_b=0.50;
+gfx_x = src_col_x + 6; gfx_y = zone_b_y + 4;
+gfx_drawstr("SOURCES:");
+
+// ── Source rows ──
+src_row_start = zone_b_y + 20;
+src_row_h = 38;
+
+// Mini TC box — right-aligned, capped width
+mtc_box_w = min(src_col_w - 76, 110);
+mtc_box_x = src_col_x + src_col_w - mtc_box_w - 6;
+mtc_box_h = 18;
+
+// --- LTC row ---
+row_y = src_row_start;
+ltc_en = slider1 > 0.5;
+ltc_is_active = (active_source == SRC_LTC);
+
+// Checkbox
+gfx_r=0.30; gfx_g=0.32; gfx_b=0.40;
+gfx_rect(src_col_x + 6, row_y + 2, 14, 14, 1);
+ltc_en ? (
+  gfx_r=0.20; gfx_g=0.80; gfx_b=0.35;
+  gfx_rect(src_col_x + 8, row_y + 4, 10, 10, 1);
+);
+!settings_open && mouse_click &&
+  mouse_x >= src_col_x+6 && mouse_x < src_col_x+20 &&
+  mouse_y >= row_y+2 && mouse_y < row_y+16 ? (
+  slider1 = 1 - slider1; slider_automate(1<<0);
+);
+
+// Label — always green-tinted for LTC, brighter when active
+gfx_setfont(1, "Arial", 11, 0);
+ltc_is_active ? (gfx_r=0.20; gfx_g=0.88; gfx_b=0.38;) : ltc_en ? (gfx_r=0.15; gfx_g=0.55; gfx_b=0.28;) : (gfx_r=0.42; gfx_g=0.44; gfx_b=0.42;);
+gfx_x = src_col_x + 24; gfx_y = row_y + 3;
+gfx_drawstr("LTC");
+
+// Mini TC box
+gfx_r=0.06; gfx_g=0.07; gfx_b=0.06;
+gfx_rect(mtc_box_x, row_y + 1, mtc_box_w, mtc_box_h, 1);
+// Border — bright green when active source, dim otherwise
+ltc_is_active ? (gfx_r=0.15; gfx_g=0.65; gfx_b=0.28;) : (gfx_r=0.18; gfx_g=0.22; gfx_b=0.18;);
+gfx_rect(mtc_box_x, row_y + 1, mtc_box_w, 1, 1);
+gfx_rect(mtc_box_x, row_y + mtc_box_h, mtc_box_w, 1, 1);
+gfx_rect(mtc_box_x, row_y + 1, 1, mtc_box_h, 1);
+gfx_rect(mtc_box_x + mtc_box_w - 1, row_y + 1, 1, mtc_box_h, 1);
+
+gfx_setfont(1, "Courier New", 12, 0);
+ltc_locked ? (
+  sprintf(#ltc_mini, "%02d:%02d:%02d:%02d", ltc_h, ltc_m, ltc_s, ltc_f);
+  ltc_is_active ? (gfx_r=0.20; gfx_g=0.88; gfx_b=0.38;)
+  : ltc_en ? (gfx_r=0.15; gfx_g=0.55; gfx_b=0.28;)
+  : (gfx_r=0.38; gfx_g=0.40; gfx_b=0.38;);
+) : (
+  gfx_r=0.38; gfx_g=0.40; gfx_b=0.38;
+  strcpy(#ltc_mini, "--:--:--:--");
+);
+gfx_measurestr(#ltc_mini, ltc_mini_w, ltc_mini_h);
+gfx_x = mtc_box_x + (mtc_box_w - ltc_mini_w) / 2;
+gfx_y = row_y + 1 + (mtc_box_h - ltc_mini_h) / 2;
+gfx_drawstr(#ltc_mini);
+
+// Status text
+gfx_setfont(1, "Arial", 9, 0);
+ltc_locked ? (
+  ltc_det_rate >= 0 ? (
+    ltc_det_rate == 0 ? strcpy(#ltc_fps, "24fps") :
+    ltc_det_rate == 1 ? strcpy(#ltc_fps, "25fps") :
+    ltc_det_rate == 2 ? strcpy(#ltc_fps, "29.97DF") :
+                        strcpy(#ltc_fps, "30fps");
+    ltc_rate_mismatch ? (
+      gfx_r=0.95; gfx_g=0.55; gfx_b=0.20;
+      sprintf(#ltc_stat, "locked %s!", #ltc_fps);
+    ) : (
+      gfx_r=0.20; gfx_g=0.80; gfx_b=0.35;
+      sprintf(#ltc_stat, "locked %s", #ltc_fps);
+    );
+  ) : (
+    gfx_r=0.20; gfx_g=0.80; gfx_b=0.35;
+    strcpy(#ltc_stat, "locked");
+  );
+) : ltc_en ? (
+  gfx_r=0.95; gfx_g=0.68; gfx_b=0.20;
+  strcpy(#ltc_stat, "searching");
+) : (
+  gfx_r=0.42; gfx_g=0.44; gfx_b=0.42;
+  strcpy(#ltc_stat, "off");
+);
+gfx_measurestr(#ltc_stat, ltc_st_w, ltc_st_h);
+gfx_x = mtc_box_x + (mtc_box_w - ltc_st_w) / 2;
+gfx_y = row_y + 21;
+gfx_drawstr(#ltc_stat);
+
+// --- MTC row ---
+row_y = src_row_start + src_row_h;
+mtc_en = slider3 > 0.5;
+mtc_is_active = (active_source == SRC_MTC);
+
+// Checkbox
+gfx_r=0.30; gfx_g=0.32; gfx_b=0.40;
+gfx_rect(src_col_x + 6, row_y + 2, 14, 14, 1);
+mtc_en ? (
+  gfx_r=0.20; gfx_g=0.80; gfx_b=0.35;
+  gfx_rect(src_col_x + 8, row_y + 4, 10, 10, 1);
+);
+!settings_open && mouse_click &&
+  mouse_x >= src_col_x+6 && mouse_x < src_col_x+20 &&
+  mouse_y >= row_y+2 && mouse_y < row_y+16 ? (
+  slider3 = 1 - slider3; slider_automate(1<<2);
+);
+
+// Label — always blue-tinted for MTC, brighter when active
+gfx_setfont(1, "Arial", 11, 0);
+mtc_is_active ? (gfx_r=0.40; gfx_g=0.70; gfx_b=0.95;) : mtc_en ? (gfx_r=0.28; gfx_g=0.45; gfx_b=0.65;) : (gfx_r=0.42; gfx_g=0.44; gfx_b=0.52;);
+gfx_x = src_col_x + 24; gfx_y = row_y + 3;
+gfx_drawstr("MTC");
+
+// Mini TC box
+gfx_r=0.06; gfx_g=0.07; gfx_b=0.06;
+gfx_rect(mtc_box_x, row_y + 1, mtc_box_w, mtc_box_h, 1);
+// Border — bright blue when active source, dim otherwise
+mtc_is_active ? (gfx_r=0.30; gfx_g=0.55; gfx_b=0.80;) : (gfx_r=0.18; gfx_g=0.22; gfx_b=0.18;);
+gfx_rect(mtc_box_x, row_y + 1, mtc_box_w, 1, 1);
+gfx_rect(mtc_box_x, row_y + mtc_box_h, mtc_box_w, 1, 1);
+gfx_rect(mtc_box_x, row_y + 1, 1, mtc_box_h, 1);
+gfx_rect(mtc_box_x + mtc_box_w - 1, row_y + 1, 1, mtc_box_h, 1);
+
+gfx_setfont(1, "Courier New", 12, 0);
+mtc_in_valid ? (
+  sprintf(#mtc_mini, "%02d:%02d:%02d:%02d", mtc_in_h, mtc_in_m, mtc_in_s, mtc_in_f);
+  mtc_is_active ? (gfx_r=0.40; gfx_g=0.70; gfx_b=0.95;)
+  : mtc_en ? (gfx_r=0.28; gfx_g=0.45; gfx_b=0.65;)
+  : (gfx_r=0.38; gfx_g=0.40; gfx_b=0.44;);
+) : (
+  gfx_r=0.38; gfx_g=0.40; gfx_b=0.44;
+  strcpy(#mtc_mini, "--:--:--:--");
+);
+gfx_measurestr(#mtc_mini, mtc_mini_w2, mtc_mini_h2);
+gfx_x = mtc_box_x + (mtc_box_w - mtc_mini_w2) / 2;
+gfx_y = row_y + 1 + (mtc_box_h - mtc_mini_h2) / 2;
+gfx_drawstr(#mtc_mini);
+
+// Status text
+gfx_setfont(1, "Arial", 9, 0);
+mtc_in_valid ? (
+  mtc_in_det_rate >= 0 ? (
+    mtc_in_det_rate == 0 ? strcpy(#mtc_fps, "24fps") :
+    mtc_in_det_rate == 1 ? strcpy(#mtc_fps, "25fps") :
+    mtc_in_det_rate == 2 ? strcpy(#mtc_fps, "29.97DF") :
+                           strcpy(#mtc_fps, "30fps");
+    mtc_in_rate_mismatch ? (
+      gfx_r=0.95; gfx_g=0.55; gfx_b=0.20;
+      sprintf(#mtc_stat, "locked %s!", #mtc_fps);
+    ) : (
+      gfx_r=0.20; gfx_g=0.80; gfx_b=0.35;
+      sprintf(#mtc_stat, "locked %s", #mtc_fps);
+    );
+  ) : (
+    gfx_r=0.20; gfx_g=0.80; gfx_b=0.35;
+    strcpy(#mtc_stat, "locked");
+  );
+) : mtc_en ? (
+  gfx_r=0.95; gfx_g=0.68; gfx_b=0.20;
+  strcpy(#mtc_stat, "searching");
+) : (
+  gfx_r=0.42; gfx_g=0.44; gfx_b=0.42;
+  strcpy(#mtc_stat, "off");
+);
+gfx_measurestr(#mtc_stat, mtc_st_w, mtc_st_h);
+gfx_x = mtc_box_x + (mtc_box_w - mtc_st_w) / 2;
+gfx_y = row_y + 21;
+gfx_drawstr(#mtc_stat);
+
+// --- Priority button (spans LTC + MTC rows) ---
+prio_btn_w = 32;
+prio_btn_x = mtc_box_x - prio_btn_w - 4;
+prio_btn_y = src_row_start + 1;
+prio_btn_h = src_row_h + mtc_box_h;
+
+// Button background
+gfx_r=0.10; gfx_g=0.12; gfx_b=0.16;
+gfx_rect(prio_btn_x, prio_btn_y, prio_btn_w, prio_btn_h, 1);
+// Border
+gfx_r=0.25; gfx_g=0.27; gfx_b=0.35;
+gfx_rect(prio_btn_x, prio_btn_y, prio_btn_w, 1, 1);
+gfx_rect(prio_btn_x, prio_btn_y+prio_btn_h-1, prio_btn_w, 1, 1);
+gfx_rect(prio_btn_x, prio_btn_y, 1, prio_btn_h, 1);
+gfx_rect(prio_btn_x+prio_btn_w-1, prio_btn_y, 1, prio_btn_h, 1);
+
+// LTC row area: show LTC's priority label in green
+gfx_setfont(1, "Arial", 8, 'b');
+
+// LTC priority label
+prio_mode > 0.5 ? (
+  strcpy(#ltc_pri, "BU");
+  gfx_r=0.15; gfx_g=0.40; gfx_b=0.20;
+) : (
+  strcpy(#ltc_pri, "MAIN");
+  gfx_r=0.20; gfx_g=0.80; gfx_b=0.35;
+);
+gfx_measurestr(#ltc_pri, lpn_w, lpn_h);
+gfx_x = prio_btn_x + (prio_btn_w - lpn_w) / 2;
+gfx_y = prio_btn_y + 3;
+gfx_drawstr(#ltc_pri);
+
+// Swap icon centered
+gfx_setfont(1, "Arial", 8, 0);
+gfx_r=0.45; gfx_g=0.48; gfx_b=0.55;
+gfx_measurestr("PRI", pri_lw, pri_lh);
+gfx_x = prio_btn_x + (prio_btn_w - pri_lw) / 2;
+gfx_y = prio_btn_y + (prio_btn_h - pri_lh) / 2;
+gfx_drawstr("PRI");
+
+// MTC priority label
+gfx_setfont(1, "Arial", 8, 'b');
+prio_mode > 0.5 ? (
+  strcpy(#mtc_pri, "MAIN");
+  gfx_r=0.35; gfx_g=0.60; gfx_b=0.85;
+) : (
+  strcpy(#mtc_pri, "BU");
+  gfx_r=0.20; gfx_g=0.35; gfx_b=0.50;
+);
+gfx_measurestr(#mtc_pri, mpn_w, mpn_h);
+gfx_x = prio_btn_x + (prio_btn_w - mpn_w) / 2;
+gfx_y = prio_btn_y + prio_btn_h - mpn_h - 3;
+gfx_drawstr(#mtc_pri);
+
+// Priority click handler
+!settings_open && mouse_click &&
+  mouse_x >= prio_btn_x && mouse_x < prio_btn_x + prio_btn_w &&
+  mouse_y >= prio_btn_y && mouse_y < prio_btn_y + prio_btn_h ? (
+  prio_mode = 1 - prio_mode;
+);
+
+// --- Fallback header ---
+fb_hdr_y = src_row_start + src_row_h * 2 + 4;
+gfx_setfont(1, "Arial", 8, 0);
+gfx_r=0.40; gfx_g=0.43; gfx_b=0.40;
+gfx_x = src_col_x + 6; gfx_y = fb_hdr_y;
+gfx_drawstr("FALLBACK:");
+
+// --- Timeline row ---
+row_y = fb_hdr_y + 14;
+tl_en = slider5 > 0.5;
+tl_is_active = (active_source == SRC_TIMELINE);
+
+// Checkbox
+gfx_r=0.30; gfx_g=0.32; gfx_b=0.40;
+gfx_rect(src_col_x + 6, row_y + 2, 14, 14, 1);
+tl_en ? (
+  gfx_r=0.20; gfx_g=0.80; gfx_b=0.35;
+  gfx_rect(src_col_x + 8, row_y + 4, 10, 10, 1);
+);
+!settings_open && mouse_click &&
+  mouse_x >= src_col_x+6 && mouse_x < src_col_x+20 &&
+  mouse_y >= row_y+2 && mouse_y < row_y+16 ? (
+  slider5 = 1 - slider5; slider_automate(1<<4);
+);
+
+// Label
+gfx_setfont(1, "Arial", 11, 0);
+tl_is_active ? (gfx_r=0.20; gfx_g=0.88; gfx_b=0.38;) : tl_en ? (gfx_r=0.55; gfx_g=0.58; gfx_b=0.65;) : (gfx_r=0.42; gfx_g=0.44; gfx_b=0.42;);
+gfx_x = src_col_x + 24; gfx_y = row_y + 3;
+gfx_drawstr("Timeline");
+
+// Mini TC box
+gfx_r=0.06; gfx_g=0.07; gfx_b=0.06;
+gfx_rect(mtc_box_x, row_y + 1, mtc_box_w, mtc_box_h, 1);
+// Border — bright when active source, dim otherwise
+tl_is_active ? (gfx_r=0.15; gfx_g=0.65; gfx_b=0.28;) : (gfx_r=0.18; gfx_g=0.22; gfx_b=0.18;);
+gfx_rect(mtc_box_x, row_y + 1, mtc_box_w, 1, 1);
+gfx_rect(mtc_box_x, row_y + mtc_box_h, mtc_box_w, 1, 1);
+gfx_rect(mtc_box_x, row_y + 1, 1, mtc_box_h, 1);
+gfx_rect(mtc_box_x + mtc_box_w - 1, row_y + 1, 1, mtc_box_h, 1);
+
+gfx_setfont(1, "Courier New", 12, 0);
+tl_active ? (
+  sprintf(#tl_mini, "%02d:%02d:%02d:%02d", tl_h, tl_m, tl_s, tl_f);
+  tl_is_active ? (gfx_r=0.75; gfx_g=0.78; gfx_b=0.85;)
+  : tl_en ? (gfx_r=0.50; gfx_g=0.52; gfx_b=0.58;)
+  : (gfx_r=0.38; gfx_g=0.40; gfx_b=0.44;);
+) : (
+  gfx_r=0.38; gfx_g=0.40; gfx_b=0.44;
+  strcpy(#tl_mini, "--:--:--:--");
+);
+gfx_measurestr(#tl_mini, tl_mini_w, tl_mini_h);
+gfx_x = mtc_box_x + (mtc_box_w - tl_mini_w) / 2;
+gfx_y = row_y + 1 + (mtc_box_h - tl_mini_h) / 2;
+gfx_drawstr(#tl_mini);
+
+// Status text
+gfx_setfont(1, "Arial", 9, 0);
+tl_en ? (
+  is_playing ? (
+    gfx_r=0.20; gfx_g=0.80; gfx_b=0.35;
+    strcpy(#tl_stat, "playing");
+  ) : (
+    gfx_r=0.88; gfx_g=0.20; gfx_b=0.20;
+    strcpy(#tl_stat, "stopped");
+  );
+) : (
+  gfx_r=0.42; gfx_g=0.44; gfx_b=0.42;
+  strcpy(#tl_stat, "off");
+);
+gfx_measurestr(#tl_stat, tl_st_w, tl_st_h);
+gfx_x = mtc_box_x + (mtc_box_w - tl_st_w) / 2;
+gfx_y = row_y + 21;
+gfx_drawstr(#tl_stat);
+
+// ── OUTPUTS header ──
+gfx_setfont(1, "Arial", 10, 'b');
+gfx_r=0.55; gfx_g=0.50; gfx_b=0.50;
+gfx_x = out_col_x + 6; gfx_y = zone_b_y + 4;
+gfx_drawstr("OUTPUTS:");
+
+// ── Output rows ──
+out_chk_x = out_col_x + out_col_w - 22;
+
+// --- LTC Audio output row ---
+row_y = src_row_start;
+ltc_out_en = slider7 > 0.5;
+
+gfx_setfont(1, "Arial", 10, 0);
+gfx_r=0.50; gfx_g=0.48; gfx_b=0.48;
+sprintf(#ltc_out_info, "%d dBFS", floor(slider12));
+gfx_x = out_col_x + 6; gfx_y = row_y + 3;
+gfx_drawstr(#ltc_out_info);
+
+gfx_setfont(1, "Arial", 11, 0);
+ltc_out_en ? (gfx_r=0.75; gfx_g=0.78; gfx_b=0.85;) : (gfx_r=0.42; gfx_g=0.44; gfx_b=0.52;);
+strcpy(#ltc_out_lbl, "LTC Audio");
+gfx_measurestr(#ltc_out_lbl, lo_w, lo_h);
+gfx_x = out_chk_x - lo_w - 8; gfx_y = row_y + 3;
+gfx_drawstr(#ltc_out_lbl);
+
+gfx_r=0.30; gfx_g=0.32; gfx_b=0.40;
+gfx_rect(out_chk_x, row_y + 2, 14, 14, 1);
+ltc_out_en ? (
+  gfx_r=0.20; gfx_g=0.80; gfx_b=0.35;
+  gfx_rect(out_chk_x + 2, row_y + 4, 10, 10, 1);
+);
+!settings_open && mouse_click &&
+  mouse_x >= out_chk_x && mouse_x < out_chk_x+14 &&
+  mouse_y >= row_y+2 && mouse_y < row_y+16 ? (
+  slider7 = 1 - slider7; slider_automate(1<<6);
+);
+
+// --- MTC MIDI output row ---
+row_y = src_row_start + src_row_h;
+mtc_out_en = slider8 > 0.5;
+
+gfx_setfont(1, "Arial", 10, 0);
+gfx_r=0.50; gfx_g=0.48; gfx_b=0.48;
+sprintf(#mtc_out_info, "QF %d/7", qf_piece);
+gfx_x = out_col_x + 6; gfx_y = row_y + 3;
+gfx_drawstr(#mtc_out_info);
+
+gfx_setfont(1, "Arial", 11, 0);
+mtc_out_en ? (gfx_r=0.75; gfx_g=0.78; gfx_b=0.85;) : (gfx_r=0.42; gfx_g=0.44; gfx_b=0.52;);
+strcpy(#mtc_out_lbl, "MTC MIDI");
+gfx_measurestr(#mtc_out_lbl, mo_w, mo_h);
+gfx_x = out_chk_x - mo_w - 8; gfx_y = row_y + 3;
+gfx_drawstr(#mtc_out_lbl);
+
+gfx_r=0.30; gfx_g=0.32; gfx_b=0.40;
+gfx_rect(out_chk_x, row_y + 2, 14, 14, 1);
+mtc_out_en ? (
+  gfx_r=0.20; gfx_g=0.80; gfx_b=0.35;
+  gfx_rect(out_chk_x + 2, row_y + 4, 10, 10, 1);
+);
+!settings_open && mouse_click &&
+  mouse_x >= out_chk_x && mouse_x < out_chk_x+14 &&
+  mouse_y >= row_y+2 && mouse_y < row_y+16 ? (
+  slider8 = 1 - slider8; slider_automate(1<<7);
+);
+
+// --- Network header ---
+gfx_setfont(1, "Arial", 8, 0);
+gfx_r=0.43; gfx_g=0.40; gfx_b=0.40;
+gfx_x = out_col_x + 6; gfx_y = fb_hdr_y;
+gfx_drawstr("NETWORK:");
+
+// --- Network output row ---
+row_y = fb_hdr_y + 14;
+scr_out_en = slider9 > 0.5;
+
+// Toggle label + checkbox
+gfx_setfont(1, "Arial", 11, 0);
+scr_out_en ? (gfx_r=0.75; gfx_g=0.78; gfx_b=0.85;) : (gfx_r=0.42; gfx_g=0.44; gfx_b=0.52;);
+strcpy(#scr_out_lbl, "Network");
+gfx_measurestr(#scr_out_lbl, so_w, so_h);
+gfx_x = out_chk_x - so_w - 8; gfx_y = row_y + 2;
+gfx_drawstr(#scr_out_lbl);
+
+gfx_r=0.30; gfx_g=0.32; gfx_b=0.40;
+gfx_rect(out_chk_x, row_y + 2, 14, 14, 1);
+scr_out_en ? (
+  gfx_r=0.20; gfx_g=0.80; gfx_b=0.35;
+  gfx_rect(out_chk_x + 2, row_y + 4, 10, 10, 1);
+);
+!settings_open && mouse_click &&
+  mouse_x >= out_chk_x && mouse_x < out_chk_x+14 &&
+  mouse_y >= row_y+2 && mouse_y < row_y+16 ? (
+  slider9 = 1 - slider9; slider_automate(1<<8);
+);
+
+// Description + script status
+gfx_setfont(1, "Arial", 8, 0);
+gfx_r=0.40; gfx_g=0.42; gfx_b=0.48;
+gfx_x = out_col_x + 6; gfx_y = row_y + 3;
+gfx_drawstr("Art-Net / OSC via Lua");
+
+// Script running status
+gfx_setfont(1, "Arial", 9, 0);
+script_running ? (
+  gfx_r=0.20; gfx_g=0.80; gfx_b=0.35;
+  strcpy(#scr_stat, "script running");
+) : (
+  gfx_r=0.55; gfx_g=0.42; gfx_b=0.20;
+  strcpy(#scr_stat, "script not detected");
+);
+gfx_x = out_col_x + 6; gfx_y = row_y + 18;
+gfx_drawstr(#scr_stat);
+
+); // end full_mode
+
+// ═════════════════════════════════════════════════════════════════════
+// SETTINGS POPUP (drawn last, on top of everything)
+// ═════════════════════════════════════════════════════════════════════
+
+settings_open ? (
+  // Semi-transparent overlay
+  gfx_r=0; gfx_g=0; gfx_b=0; gfx_a=0.6;
+  gfx_rect(0, 0, gfx_w, gfx_h, 1);
+  gfx_a=1;
+
+  // Popup dimensions
+  pop_w = min(280, gfx_w - 20);
+  pop_h = min(160, gfx_h - 20);
+  pop_x = floor((gfx_w - pop_w) / 2);
+  pop_y = floor((gfx_h - pop_h) / 2);
+
+  // Popup background
+  gfx_r=0.12; gfx_g=0.13; gfx_b=0.17;
+  gfx_rect(pop_x, pop_y, pop_w, pop_h, 1);
+  // Border
+  gfx_r=0.28; gfx_g=0.30; gfx_b=0.38;
+  gfx_rect(pop_x, pop_y, pop_w, 1, 1);
+  gfx_rect(pop_x, pop_y+pop_h-1, pop_w, 1, 1);
+  gfx_rect(pop_x, pop_y, 1, pop_h, 1);
+  gfx_rect(pop_x+pop_w-1, pop_y, 1, pop_h, 1);
+
+  // Title
+  gfx_setfont(1, "Arial", 11, 'b');
+  gfx_r=0.65; gfx_g=0.68; gfx_b=0.75;
+  gfx_x = pop_x + 10; gfx_y = pop_y + 8;
+  gfx_drawstr("Settings");
+
+  // Close X
+  close_x = pop_x + pop_w - 24;
+  close_y = pop_y + 6;
+  gfx_r=0.55; gfx_g=0.45; gfx_b=0.45;
+  gfx_setfont(1, "Arial", 13, 'b');
+  gfx_x = close_x; gfx_y = close_y;
+  gfx_drawstr("X");
+  mouse_click &&
+    mouse_x >= close_x && mouse_x < close_x + 16 &&
+    mouse_y >= close_y && mouse_y < close_y + 16 ? (
+    settings_open = 0;
+  );
+
+  // Divider
+  gfx_r=0.25; gfx_g=0.27; gfx_b=0.33;
+  gfx_rect(pop_x + 8, pop_y + 28, pop_w - 16, 1, 1);
+
+  // Layout
+  set_label_x = pop_x + 14;
+  set_row_h = 34;
+  sld_track_h = 6;
+
+  // ── Row 1: Framerate (centered dropdown) ──
+  set_y = pop_y + 38;
+  gfx_setfont(1, "Arial", 11, 0);
+  gfx_r=0.60; gfx_g=0.63; gfx_b=0.70;
+  gfx_x = set_label_x; gfx_y = set_y + 2;
+  gfx_drawstr("Framerate:");
+
+  fps_type == 0 ? strcpy(#fps_val, "24fps") :
+  fps_type == 1 ? strcpy(#fps_val, "25fps") :
+  fps_type == 2 ? strcpy(#fps_val, "29.97 DF") :
+                  strcpy(#fps_val, "30fps");
+
+  gfx_setfont(1, "Arial", 11, 'b');
+  gfx_measurestr(#fps_val, fps_val_w, fps_val_h);
+  fps_btn_w = fps_val_w + 24;
+  fps_btn_h = 20;
+  fps_btn_x = pop_x + pop_w - fps_btn_w - 14;
+
+  gfx_r=0.18; gfx_g=0.20; gfx_b=0.26;
+  gfx_rect(fps_btn_x, set_y, fps_btn_w, fps_btn_h, 1);
+  gfx_r=0.28; gfx_g=0.30; gfx_b=0.38;
+  gfx_rect(fps_btn_x, set_y, fps_btn_w, 1, 1);
+  gfx_rect(fps_btn_x, set_y+fps_btn_h-1, fps_btn_w, 1, 1);
+  gfx_rect(fps_btn_x, set_y, 1, fps_btn_h, 1);
+  gfx_rect(fps_btn_x+fps_btn_w-1, set_y, 1, fps_btn_h, 1);
+
+  gfx_r=0.80; gfx_g=0.83; gfx_b=0.90;
+  gfx_x = fps_btn_x + (fps_btn_w - fps_val_w) / 2;
+  gfx_y = set_y + (fps_btn_h - fps_val_h) / 2;
+  gfx_drawstr(#fps_val);
+
+  mouse_click &&
+    mouse_x >= fps_btn_x && mouse_x < fps_btn_x + fps_btn_w &&
+    mouse_y >= set_y && mouse_y < set_y + fps_btn_h ? (
+    gfx_x = fps_btn_x; gfx_y = set_y + fps_btn_h;
+    fps_choice = gfx_showmenu("24fps (Film)|25fps (EBU)|29.97 DF|30fps (SMPTE)");
+    fps_choice > 0 ? (
+      slider10 = fps_choice - 1;
+      slider_automate(1<<9);
+      update_params();
+    );
+  );
+
+  // ── Row 2: LTC Threshold (draggable slider) ──
+  set_y = pop_y + 38 + set_row_h;
+  gfx_setfont(1, "Arial", 11, 0);
+  gfx_r=0.60; gfx_g=0.63; gfx_b=0.70;
+  gfx_x = set_label_x; gfx_y = set_y + 2;
+  gfx_drawstr("LTC Threshold:");
+
+  // Slider track
+  sld_x = pop_x + pop_w - 14 - 120;
+  sld_w = 120;
+  sld_track_y = set_y + 10 - sld_track_h / 2;
+
+  thr_frac = (slider11 - (-48)) / ((-6) - (-48));
+  thr_frac = max(0, min(1, thr_frac));
+
+  // Track bg
+  gfx_r=0.15; gfx_g=0.16; gfx_b=0.20;
+  gfx_rect(sld_x, sld_track_y, sld_w, sld_track_h, 1);
+  // Filled
+  gfx_r=0.25; gfx_g=0.50; gfx_b=0.35;
+  gfx_rect(sld_x, sld_track_y, floor(sld_w * thr_frac), sld_track_h, 1);
+  // Handle
+  thr_handle_x = sld_x + floor(sld_w * thr_frac) - 4;
+  gfx_r=0.70; gfx_g=0.73; gfx_b=0.80;
+  gfx_rect(thr_handle_x, sld_track_y - 3, 8, sld_track_h + 6, 1);
+
+  // Value label
+  sprintf(#thr_val, "%d dB", floor(slider11));
+  gfx_setfont(1, "Arial", 9, 0);
+  gfx_r=0.55; gfx_g=0.58; gfx_b=0.65;
+  gfx_measurestr(#thr_val, thr_vw, thr_vh);
+  gfx_x = sld_x + (sld_w - thr_vw) / 2;
+  gfx_y = set_y + 18;
+  gfx_drawstr(#thr_val);
+
+  // Drag initiation
+  mouse_click &&
+    mouse_x >= sld_x - 4 && mouse_x < sld_x + sld_w + 4 &&
+    mouse_y >= sld_track_y - 6 && mouse_y < sld_track_y + sld_track_h + 6 ? (
+    drag_target = 1;
+  );
+  // Drag update
+  (mouse_cap & 1) && drag_target == 1 ? (
+    new_frac = (mouse_x - sld_x) / sld_w;
+    new_frac = max(0, min(1, new_frac));
+    slider11 = floor(-48 + new_frac * 42 + 0.5);
+    slider11 = max(-48, min(-6, slider11));
+    slider_automate(1<<10);
+    update_params();
+  );
+
+  // ── Row 3: LTC Output Level (draggable slider) ──
+  set_y = pop_y + 38 + set_row_h * 2;
+  gfx_setfont(1, "Arial", 11, 0);
+  gfx_r=0.60; gfx_g=0.63; gfx_b=0.70;
+  gfx_x = set_label_x; gfx_y = set_y + 2;
+  gfx_drawstr("LTC Output:");
+
+  // Slider track
+  lvl_sld_x = pop_x + pop_w - 14 - 120;
+  lvl_sld_w = 120;
+  lvl_track_y = set_y + 10 - sld_track_h / 2;
+
+  lvl_frac = (slider12 - (-40)) / (0 - (-40));
+  lvl_frac = max(0, min(1, lvl_frac));
+
+  // Track bg
+  gfx_r=0.15; gfx_g=0.16; gfx_b=0.20;
+  gfx_rect(lvl_sld_x, lvl_track_y, lvl_sld_w, sld_track_h, 1);
+  // Filled
+  gfx_r=0.25; gfx_g=0.50; gfx_b=0.35;
+  gfx_rect(lvl_sld_x, lvl_track_y, floor(lvl_sld_w * lvl_frac), sld_track_h, 1);
+  // Handle
+  lvl_handle_x = lvl_sld_x + floor(lvl_sld_w * lvl_frac) - 4;
+  gfx_r=0.70; gfx_g=0.73; gfx_b=0.80;
+  gfx_rect(lvl_handle_x, lvl_track_y - 3, 8, sld_track_h + 6, 1);
+
+  // Value label
+  sprintf(#lvl_val, "%d dBFS", floor(slider12));
+  gfx_setfont(1, "Arial", 9, 0);
+  gfx_r=0.55; gfx_g=0.58; gfx_b=0.65;
+  gfx_measurestr(#lvl_val, lvl_vw, lvl_vh);
+  gfx_x = lvl_sld_x + (lvl_sld_w - lvl_vw) / 2;
+  gfx_y = set_y + 18;
+  gfx_drawstr(#lvl_val);
+
+  // Drag initiation
+  mouse_click &&
+    mouse_x >= lvl_sld_x - 4 && mouse_x < lvl_sld_x + lvl_sld_w + 4 &&
+    mouse_y >= lvl_track_y - 6 && mouse_y < lvl_track_y + sld_track_h + 6 ? (
+    drag_target = 2;
+  );
+  // Drag update
+  (mouse_cap & 1) && drag_target == 2 ? (
+    new_frac = (mouse_x - lvl_sld_x) / lvl_sld_w;
+    new_frac = max(0, min(1, new_frac));
+    slider12 = floor(-40 + new_frac * 40 + 0.5);
+    slider12 = max(-40, min(0, slider12));
+    slider_automate(1<<11);
+    update_params();
+  );
+
+  // Click outside popup to close
+  mouse_click && drag_target == 0 &&
+    (mouse_x < pop_x || mouse_x >= pop_x + pop_w ||
+     mouse_y < pop_y || mouse_y >= pop_y + pop_h) ? (
+    settings_open = 0;
+  );
+);
+
+// Save mouse state
+last_mouse_cap = mouse_cap;
