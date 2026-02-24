@@ -47,20 +47,38 @@ jobs:
             exit 0
           fi
           python3 << 'PYEOF'
-          import re, os
+          import os
+          import xml.etree.ElementTree as ET
 
           version = os.environ["VERSION"]
-          content = open("index.xml").read()
+          tree = ET.parse("index.xml")
+          root = tree.getroot()
+          removed = False
 
-          # Remove <version name="X.X.X" ...>...</version> blocks (including surrounding whitespace)
-          pattern = r'\s*<version name="' + re.escape(version) + r'"[^>]*>.*?</version>'
-          new_content = re.sub(pattern, '', content, flags=re.DOTALL)
+          # Remove <version> elements matching this version
+          for reapack in root.iter("reapack"):
+              for ver in reapack.findall("version"):
+                  if ver.get("name") == version:
+                      reapack.remove(ver)
+                      removed = True
 
-          if content == new_content:
+          if not removed:
               print(f"Version {version} not found in index.xml")
           else:
-              open("index.xml", "w").write(new_content)
-              print(f"Removed version {version} from index.xml")
+              # Remove <reapack> elements that have no <version> children left
+              for category in root.findall("category"):
+                  for rp in category.findall("reapack"):
+                      if not rp.findall("version"):
+                          category.remove(rp)
+
+              # Remove empty <category> elements
+              for category in root.findall("category"):
+                  if len(category) == 0:
+                      root.remove(category)
+
+              ET.indent(tree, space="  ")
+              tree.write("index.xml", encoding="utf-8", xml_declaration=True)
+              print(f"Removed version {version} from index.xml (cleaned empty elements)")
           PYEOF
 
       - name: Find and revert publish commit
