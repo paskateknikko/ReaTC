@@ -308,10 +308,6 @@ local function draw_ui()
     return open
   end
 
-  local win_w = ImGui.GetWindowWidth(ctx)
-  local scale = math.max(0.7, math.min(1.5, win_w / 600))
-  ImGui.SetWindowFontScale(ctx, scale)
-
   local n_selected = count_selected()
   local n_regions  = #state.regions
 
