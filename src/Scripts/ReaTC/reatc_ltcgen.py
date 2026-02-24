@@ -14,6 +14,8 @@
 # @noindex
 # @version {{VERSION}}
 
+from __future__ import annotations
+
 __version__ = "{{VERSION}}"
 
 import sys
@@ -32,8 +34,16 @@ SYNC_WORD = 0x3FFD
 AMPLITUDE = 16383
 
 
-def build_ltc_frame(h, m, s, f, fps_type):
-    """Build the 80-bit LTC word as a list of ints (0 or 1), LSB-first."""
+def build_ltc_frame(h: int, m: int, s: int, f: int, fps_type: int) -> list[int]:
+    """Build the 80-bit LTC word as a list of ints (0 or 1), LSB-first.
+
+    @param h: Hours (0-23).
+    @param m: Minutes (0-59).
+    @param s: Seconds (0-59).
+    @param f: Frame number (0-29).
+    @param fps_type: Frame-rate type (0=24fps, 1=25fps, 2=29.97DF, 3=30fps).
+    @return: List of 80 integers, each 0 or 1, representing the LTC frame bits.
+    """
     bits = [0] * 80
     drop = fps_type == 2
 
@@ -86,8 +96,16 @@ def build_ltc_frame(h, m, s, f, fps_type):
     return bits
 
 
-def advance_tc(h, m, s, f, fps_type):
-    """Increment timecode by one frame, handling drop-frame correctly."""
+def advance_tc(h: int, m: int, s: int, f: int, fps_type: int) -> tuple[int, int, int, int]:
+    """Increment timecode by one frame, handling drop-frame correctly.
+
+    @param h: Hours (0-23).
+    @param m: Minutes (0-59).
+    @param s: Seconds (0-59).
+    @param f: Frame number.
+    @param fps_type: Frame-rate type (0=24fps, 1=25fps, 2=29.97DF, 3=30fps).
+    @return: Tuple of (hours, minutes, seconds, frames) after advancing one frame.
+    """
     fps = FPS_INT[fps_type]
     drop = fps_type == 2
     f += 1
@@ -105,15 +123,18 @@ def advance_tc(h, m, s, f, fps_type):
     return h, m, s, f
 
 
-def render_frame(bits, n_samples, gen_out, amplitude=AMPLITUDE):
-    """
-    Convert 80 LTC bits to n_samples int16 PCM bytes using biphase-mark.
+def render_frame(bits: list[int], n_samples: int, gen_out: int, amplitude: int = AMPLITUDE) -> tuple[bytes, int]:
+    """Convert 80 LTC bits to n_samples int16 PCM bytes using biphase-mark.
 
     Encoding rules (matches reatc_ltc.jsfx @sample block):
       - bit boundary (start of each bit):  always flip gen_out
       - bit midpoint:                       flip gen_out only for 1-bits
 
-    Returns (raw_bytes, final_gen_out) where raw_bytes is 2*n_samples bytes.
+    @param bits: List of 80 ints (0 or 1) from build_ltc_frame().
+    @param n_samples: Number of PCM samples to generate for this frame.
+    @param gen_out: Current output polarity (+1 or -1).
+    @param amplitude: Peak sample value (default AMPLITUDE).
+    @return: Tuple of (raw PCM bytes, final gen_out polarity).
     """
     pos_bytes = struct.pack("<h",  amplitude)
     neg_bytes = struct.pack("<h", -amplitude)
@@ -146,9 +167,21 @@ def render_frame(bits, n_samples, gen_out, amplitude=AMPLITUDE):
     return b"".join(parts), gen_out
 
 
-def generate_ltc_wav(fps_type, h, m, s, f, n_frames, sample_rate, out_path,
-                     amplitude=AMPLITUDE):
-    """Write a mono 16-bit WAV containing n_frames of LTC audio."""
+def generate_ltc_wav(fps_type: int, h: int, m: int, s: int, f: int,
+                     n_frames: int, sample_rate: int, out_path: str,
+                     amplitude: int = AMPLITUDE) -> None:
+    """Write a mono 16-bit WAV containing n_frames of LTC audio.
+
+    @param fps_type: Frame-rate type (0=24fps, 1=25fps, 2=29.97DF, 3=30fps).
+    @param h: Starting hours (0-23).
+    @param m: Starting minutes (0-59).
+    @param s: Starting seconds (0-59).
+    @param f: Starting frame number.
+    @param n_frames: Total number of timecode frames to render.
+    @param sample_rate: Audio sample rate in Hz (e.g. 48000).
+    @param out_path: Filesystem path for the output WAV file.
+    @param amplitude: Peak sample value (default AMPLITUDE).
+    """
     fps_val = FPS_VAL[fps_type]
     gen_out = 1  # initial polarity
     ch, cm, cs, cf = h, m, s, f
@@ -172,7 +205,8 @@ def generate_ltc_wav(fps_type, h, m, s, f, n_frames, sample_rate, out_path,
             ch, cm, cs, cf = advance_tc(ch, cm, cs, cf, fps_type)
 
 
-def main():
+def main() -> None:
+    """Entry point: parse CLI arguments and generate an LTC WAV file."""
     if len(sys.argv) < 9:
         print(
             "Usage: reatc_ltcgen.py <fps_type> <h> <m> <s> <f>"
@@ -189,7 +223,7 @@ def main():
     n_frames    = int(sys.argv[6])
     sample_rate = int(sys.argv[7])
     out_path    = sys.argv[8]
-    amplitude   = int(sys.argv[9]) if len(sys.argv) > 9 else AMPLITUDE
+    amplitude   = max(1, min(32767, int(sys.argv[9]))) if len(sys.argv) > 9 else AMPLITUDE
 
     generate_ltc_wav(fps_type, h, m, s, f, n_frames, sample_rate, out_path,
                      amplitude)

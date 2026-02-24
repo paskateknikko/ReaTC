@@ -1,7 +1,10 @@
--- ReaTC — https://github.com/paskateknikko/ReaTC
+--- ReaTC — https://github.com/paskateknikko/ReaTC
 -- Copyright (c) 2025 Tuukka Aimasmäki. MIT License — see LICENSE.
 --
--- ReaTC UI — ReaImGui implementation
+--- ReaTC UI module — ReaImGui-based window with main TC display and settings popup.
+-- Returns a factory function that takes `(core, outputs)` and returns `{ init, draw_ui }`.
+-- `draw_ui()` returns false when the window is closed (signals the defer loop to stop).
+-- @module reatc_ui
 -- @noindex
 -- @version {{VERSION}}
 
@@ -220,9 +223,13 @@ return function(core, outputs)
     ImGui.SetNextItemWidth(ctx, 180)
     local osc_addr_changed, new_osc_addr = ImGui.InputText(ctx, 'OSC Address##osc', s.osc_address)
     if osc_addr_changed then
-      s.osc_address = new_osc_addr
-      core.save_settings()
-      if s.osc_enabled then outputs.stop_osc_daemon() end
+      if new_osc_addr:sub(1, 1) == "/" then
+        s.osc_address = new_osc_addr
+        core.save_settings()
+        if s.osc_enabled then outputs.stop_osc_daemon() end
+      elseif new_osc_addr ~= "" then
+        ImGui.TextColored(ctx, C.red, "OSC address must start with /")
+      end
     end
 
     if s.osc_error then

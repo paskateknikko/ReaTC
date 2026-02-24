@@ -1,7 +1,10 @@
--- ReaTC — https://github.com/paskateknikko/ReaTC
+--- ReaTC — https://github.com/paskateknikko/ReaTC
 -- Copyright (c) 2025 Tuukka Aimasmäki. MIT License — see LICENSE.
 --
--- ReaTC core: constants, state, config, and timecode helpers
+--- ReaTC core module: constants, shared state, config persistence, and timecode math.
+-- All other modules depend on this. The `state` table is shared across the entire
+-- ReaTC runtime — UI, outputs, and the main loop all read/write it.
+-- @module reatc_core
 -- @noindex
 -- @version {{VERSION}}
 
@@ -55,6 +58,22 @@ M.SRC_TIMELINE = 3
 
 M.SRC_NAMES = { [0] = "None", [1] = "LTC", [2] = "MTC", [3] = "Timeline" }
 
+-- gmem indices — must match reatc_tc.jsfx @init constants
+M.GMEM_TC_HOUR         = 0
+M.GMEM_TC_MIN          = 1
+M.GMEM_TC_SEC          = 2
+M.GMEM_TC_FRAME        = 3
+M.GMEM_TC_FRAMERATE    = 4
+M.GMEM_TC_VALID        = 6
+M.GMEM_TC_WRITE_COUNTER = 7
+M.GMEM_SCRIPT_ALIVE    = 8
+M.GMEM_ACTIVE_SOURCE   = 17
+M.GMEM_TC_OFFSET_H     = 20
+M.GMEM_TC_OFFSET_M     = 21
+M.GMEM_TC_OFFSET_S     = 22
+M.GMEM_TC_OFFSET_F     = 23
+M.GMEM_TC_OFFSET_SIGN  = 24
+
 -- State
 M.state = {
   -- Python
@@ -104,7 +123,9 @@ M.state = {
 }
 
 
--- Python detection
+--- Search for a working Python 3 interpreter.
+-- Tries each candidate in order, returns the first that responds to `--version`.
+-- @return string|nil Python binary path, or nil if not found
 function M.find_python()
   for _, cmd in ipairs(M.PYTHON_CANDIDATES) do
     local quoted = M.is_win and ('"' .. cmd .. '"') or cmd
@@ -117,19 +138,21 @@ function M.find_python()
   return nil
 end
 
--- Read active TC from gmem (written by unified JSFX)
+--- Read active timecode from gmem shared memory (written by the JSFX).
+-- Updates `state.tc_h/m/s/f`, `state.tc_valid`, `state.active_source`,
+-- `state.framerate_type`, and `state.jsfx_detected`.
 function M.update_tc_from_gmem()
   local s = M.state
-  s.tc_h = math.floor(reaper.gmem_read(0))
-  s.tc_m = math.floor(reaper.gmem_read(1))
-  s.tc_s = math.floor(reaper.gmem_read(2))
-  s.tc_f = math.floor(reaper.gmem_read(3))
-  s.framerate_type = math.floor(reaper.gmem_read(4))
-  s.tc_valid = reaper.gmem_read(6) > 0.5
-  s.active_source = math.floor(reaper.gmem_read(17))
+  s.tc_h = math.floor(reaper.gmem_read(M.GMEM_TC_HOUR))
+  s.tc_m = math.floor(reaper.gmem_read(M.GMEM_TC_MIN))
+  s.tc_s = math.floor(reaper.gmem_read(M.GMEM_TC_SEC))
+  s.tc_f = math.floor(reaper.gmem_read(M.GMEM_TC_FRAME))
+  s.framerate_type = math.floor(reaper.gmem_read(M.GMEM_TC_FRAMERATE))
+  s.tc_valid = reaper.gmem_read(M.GMEM_TC_VALID) > 0.5
+  s.active_source = math.floor(reaper.gmem_read(M.GMEM_ACTIVE_SOURCE))
 
-  -- JSFX detection: TC_WRITE_COUNTER at gmem[7] increments every @block
-  local wc = math.floor(reaper.gmem_read(7))
+  -- JSFX detection: TC_WRITE_COUNTER increments every @block
+  local wc = math.floor(reaper.gmem_read(M.GMEM_TC_WRITE_COUNTER))
   if wc ~= s.last_write_counter then
     s.last_write_counter = wc
     s.jsfx_stale_count = 0
@@ -142,13 +165,20 @@ function M.update_tc_from_gmem()
   end
 end
 
--- Get the current active TC values
+--- Get the current active timecode values.
+-- @return number hours (0-23)
+-- @return number minutes (0-59)
+-- @return number seconds (0-59)
+-- @return number frames (0-fps)
+-- @return string source name ("None", "LTC", "MTC", or "Timeline")
 function M.get_active_tc()
   local s = M.state
   return s.tc_h, s.tc_m, s.tc_s, s.tc_f, M.SRC_NAMES[s.active_source] or "None"
 end
 
--- Validate IPv4 address format (aaa.bbb.ccc.ddd where each octet is 0-255)
+--- Validate an IPv4 address string.
+-- @param ip string address in "aaa.bbb.ccc.ddd" format
+-- @return boolean true if valid
 function M.is_valid_ipv4(ip)
   if not ip or type(ip) ~= "string" then return false end
   local octets = {}
@@ -162,6 +192,11 @@ function M.is_valid_ipv4(ip)
   return #octets == 4
 end
 
+--- Convert a time position in seconds to HH:MM:SS:FF timecode.
+-- Uses integer math for drop-frame (29.97fps) to avoid float drift.
+-- @param pos number time position in seconds (clamped to >= 0)
+-- @param fr_type number framerate type index (0=24, 1=25, 2=29.97DF, 3=30)
+-- @return number hours, number minutes, number seconds, number frames
 function M.seconds_to_timecode(pos, fr_type)
   pos = math.max(0, pos)  -- clamp negative play positions to zero
   local fps = M.FPS_VAL[fr_type + 1]
@@ -186,26 +221,42 @@ function M.seconds_to_timecode(pos, fr_type)
   end
 end
 
--- Config persistence
+-- Settings key constants
+local SK = {
+  DEST_IP           = "dest_ip",
+  ARTNET_ENABLED    = "artnet_enabled",
+  OSC_ENABLED       = "osc_enabled",
+  OSC_IP            = "osc_ip",
+  OSC_PORT          = "osc_port",
+  OSC_ADDRESS       = "osc_address",
+  TC_OFFSET_H       = "tc_offset_h",
+  TC_OFFSET_M       = "tc_offset_m",
+  TC_OFFSET_S       = "tc_offset_s",
+  TC_OFFSET_F       = "tc_offset_f",
+  TC_OFFSET_NEGATIVE = "tc_offset_negative",
+}
+
+--- Load all settings from REAPER ExtState and apply to `state`.
+-- Also cleans up legacy settings keys from older versions.
 function M.load_settings()
   local function gets(k)
     local v = reaper.GetExtState(M.EXT_SECTION, k)
     return v ~= "" and v or nil
   end
   local s = M.state
-  local loaded_ip = gets("dest_ip")
+  local loaded_ip = gets(SK.DEST_IP)
   s.dest_ip = (loaded_ip and M.is_valid_ipv4(loaded_ip)) and loaded_ip or s.dest_ip
-  s.artnet_enabled  = gets("artnet_enabled") == "true"
-  s.osc_enabled    = gets("osc_enabled") == "true"
-  local loaded_osc_ip = gets("osc_ip")
+  s.artnet_enabled  = gets(SK.ARTNET_ENABLED) == "true"
+  s.osc_enabled    = gets(SK.OSC_ENABLED) == "true"
+  local loaded_osc_ip = gets(SK.OSC_IP)
   s.osc_ip         = (loaded_osc_ip and M.is_valid_ipv4(loaded_osc_ip)) and loaded_osc_ip or s.osc_ip
-  s.osc_port       = tonumber(gets("osc_port")) or 9000
-  s.osc_address    = gets("osc_address") or "/tc"
-  s.tc_offset_h        = tonumber(gets("tc_offset_h")) or 0
-  s.tc_offset_m        = tonumber(gets("tc_offset_m")) or 0
-  s.tc_offset_s        = tonumber(gets("tc_offset_s")) or 0
-  s.tc_offset_f        = tonumber(gets("tc_offset_f")) or 0
-  s.tc_offset_negative = gets("tc_offset_negative") == "true"
+  s.osc_port       = tonumber(gets(SK.OSC_PORT)) or 9000
+  s.osc_address    = gets(SK.OSC_ADDRESS) or "/tc"
+  s.tc_offset_h        = tonumber(gets(SK.TC_OFFSET_H)) or 0
+  s.tc_offset_m        = tonumber(gets(SK.TC_OFFSET_M)) or 0
+  s.tc_offset_s        = tonumber(gets(SK.TC_OFFSET_S)) or 0
+  s.tc_offset_f        = tonumber(gets(SK.TC_OFFSET_F)) or 0
+  s.tc_offset_negative = gets(SK.TC_OFFSET_NEGATIVE) == "true"
 
   -- Clean up legacy settings (framerate now owned by JSFX, old track-management keys)
   reaper.DeleteExtState(M.EXT_SECTION, "framerate_type", true)
@@ -217,20 +268,21 @@ function M.load_settings()
   reaper.DeleteExtState(M.EXT_SECTION, "mtc_track_guid", true)
 end
 
+--- Persist all settings to REAPER ExtState.
 function M.save_settings()
   local s = M.state
   local function sets(k, v) reaper.SetExtState(M.EXT_SECTION, k, tostring(v), true) end
-  sets("dest_ip",        s.dest_ip)
-  sets("artnet_enabled",  s.artnet_enabled)
-  sets("osc_enabled",    s.osc_enabled)
-  sets("osc_ip",         s.osc_ip)
-  sets("osc_port",       s.osc_port)
-  sets("osc_address",        s.osc_address)
-  sets("tc_offset_h",        s.tc_offset_h)
-  sets("tc_offset_m",        s.tc_offset_m)
-  sets("tc_offset_s",        s.tc_offset_s)
-  sets("tc_offset_f",        s.tc_offset_f)
-  sets("tc_offset_negative", s.tc_offset_negative)
+  sets(SK.DEST_IP,           s.dest_ip)
+  sets(SK.ARTNET_ENABLED,    s.artnet_enabled)
+  sets(SK.OSC_ENABLED,       s.osc_enabled)
+  sets(SK.OSC_IP,            s.osc_ip)
+  sets(SK.OSC_PORT,          s.osc_port)
+  sets(SK.OSC_ADDRESS,       s.osc_address)
+  sets(SK.TC_OFFSET_H,       s.tc_offset_h)
+  sets(SK.TC_OFFSET_M,       s.tc_offset_m)
+  sets(SK.TC_OFFSET_S,       s.tc_offset_s)
+  sets(SK.TC_OFFSET_F,       s.tc_offset_f)
+  sets(SK.TC_OFFSET_NEGATIVE, s.tc_offset_negative)
 end
 
 return M

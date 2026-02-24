@@ -12,6 +12,22 @@
  * Copyright (c) 2025 Tuukka Aimasmäki. MIT License — see LICENSE.
  */
 
+/**
+ * @file reaper_reatc.cpp
+ * @brief REAPER extension that registers ReaTC custom actions and brokers
+ *        IPC between the action system and the Lua scripts via ExtState.
+ *
+ * ExtState IPC contract
+ * ---------------------
+ * **ReaTC_CMD** (extension -> script, consumed once by Lua):
+ *   - "toggle_artnet" = "1"   Request the Lua script to toggle Art-Net output.
+ *   - "toggle_osc"    = "1"   Request the Lua script to toggle OSC output.
+ *
+ * **ReaTC_STATE** (script -> extension, read-only by C++):
+ *   - "artnet"  = "0"|"1"    Current Art-Net output state (for toggle_action).
+ *   - "osc"     = "0"|"1"    Current OSC output state (for toggle_action).
+ */
+
 #include "reaper_plugin.h"
 #include <cstring>
 #include <string>
@@ -51,6 +67,13 @@ static const char* g_script_files[2] = {
 // ---------------------------------------------------------------------------
 // Script resolution: find and run a Lua script via AddRemoveReaScript
 // ---------------------------------------------------------------------------
+/**
+ * @brief Resolve a Lua script path and execute it via Main_OnCommand.
+ * @param index  0 = reatc.lua (main UI), 1 = reatc_regions_to_ltc.lua
+ *
+ * The command ID is cached after the first call so that AddRemoveReaScript
+ * is only invoked once per script per session.
+ */
 static void run_script(int index)
 {
   if (!GetResourcePath || !AddRemoveReaScript || !Main_OnCommand) return;
@@ -74,6 +97,15 @@ static void run_script(int index)
 // ---------------------------------------------------------------------------
 // hookcommand2 — intercept our custom action triggers
 // ---------------------------------------------------------------------------
+/**
+ * @brief REAPER hookcommand2 callback — intercept our registered action IDs.
+ *
+ * ACT_MAIN and ACT_BAKE launch Lua scripts directly.  ACT_ARTNET and
+ * ACT_OSC write a one-shot flag into ReaTC_CMD ExtState, which the
+ * running Lua script polls and consumes on its next defer cycle.
+ *
+ * @return true if the command was handled, false to let REAPER continue.
+ */
 static bool hook_command2(KbdSectionInfo* sec, int command, int val, int val2, int relmode, HWND hwnd)
 {
   if (command == g_cmd_ids[ACT_MAIN]) {
@@ -98,6 +130,14 @@ static bool hook_command2(KbdSectionInfo* sec, int command, int val, int val2, i
 // ---------------------------------------------------------------------------
 // toggleaction — report on/off state for toggle actions in Actions list
 // ---------------------------------------------------------------------------
+/**
+ * @brief REAPER toggleaction callback — report on/off state for the Actions list.
+ *
+ * Reads ReaTC_STATE ExtState keys written by the Lua script to reflect
+ * the current toggle state of Art-Net and OSC outputs.
+ *
+ * @return 1 = on, 0 = off, -1 = not our action.
+ */
 static int toggle_action(int command_id)
 {
   if (!GetExtState) return -1;
@@ -116,6 +156,15 @@ static int toggle_action(int command_id)
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
+/**
+ * @brief Extension entry point called by REAPER on load and unload.
+ *
+ * On load (rec != NULL): resolves API function pointers, registers four
+ * custom actions, and installs hookcommand2 + toggleaction callbacks.
+ * On unload (rec == NULL): removes cached script registrations.
+ *
+ * @return 1 on success, 0 on failure or unload.
+ */
 extern "C" REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
     HINSTANCE hInstance, reaper_plugin_info_t* rec)
 {

@@ -210,10 +210,16 @@ local function generate_selected()
   local sep     = core.is_win and "\\" or "/"
   local ltc_dir = proj_path .. sep .. "ReaTC_LTC"
 
+  local mkdir_ok
   if core.is_win then
-    os.execute('if not exist "' .. ltc_dir .. '" mkdir "' .. ltc_dir .. '"')
+    mkdir_ok = os.execute('if not exist "' .. ltc_dir .. '" mkdir "' .. ltc_dir .. '"')
   else
-    os.execute('mkdir -p "' .. ltc_dir .. '"')
+    mkdir_ok = os.execute('mkdir -p "' .. ltc_dir .. '"')
+  end
+  if mkdir_ok == nil or mkdir_ok == false then
+    reaper.MB("Failed to create output directory:\n" .. ltc_dir,
+      "ReaTC — Bake LTC", 0)
+    return
   end
 
   local sample_rate = math.floor(reaper.GetSetProjectInfo(0, "SAMPLERATE", 0, false))
@@ -259,7 +265,11 @@ local function generate_selected()
       wav_path, amplitude,
       core.dev_null)
 
-    os.execute(cmd)
+    local gen_ok = os.execute(cmd)
+    if gen_ok == nil or gen_ok == false then
+      err_list[#err_list + 1] = fname .. " (generation failed)"
+      goto continue_region
+    end
 
     local src = reaper.PCM_Source_CreateFromFile(wav_path)
     if src then
@@ -276,6 +286,7 @@ local function generate_selected()
     else
       err_list[#err_list + 1] = fname
     end
+    ::continue_region::
   end
 
   reaper.Undo_EndBlock("ReaTC: Bake LTC from regions", -1)

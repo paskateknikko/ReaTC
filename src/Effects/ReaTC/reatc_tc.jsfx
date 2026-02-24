@@ -601,6 +601,8 @@ function process_mtc_qf(data_byte) local(piece, nibble, mid_f, mid_s, det_fps) (
   // After pieces 0-3, assemble frames + seconds from current nibbles and
   // keep hours + minutes from the previous full-cycle assembly. This gives
   // one TC update per actual frame instead of one per two frames.
+  // Guarded by mtc_in_got_first_full so that the very first partial cycle
+  // (which has no valid hours/minutes yet) is never reported. (BUG-004)
   piece == 3 && (mtc_in_pieces & 0x0F) == 0x0F && mtc_in_got_first_full ? (
     mid_f = mtc_in_nibbles_0 | ((mtc_in_nibbles_1 & 0x01) << 4);
     mid_s = mtc_in_nibbles_2 | ((mtc_in_nibbles_3 & 0x03) << 4);
@@ -608,6 +610,8 @@ function process_mtc_qf(data_byte) local(piece, nibble, mid_f, mid_s, det_fps) (
     mtc_in_s = mid_s;
     // Minutes rollover: when seconds + frames roll to 0, the minutes nibbles
     // (pieces 4-5) haven't arrived yet and still hold the previous value.
+    // Mid-cycle minute rollover is safe here because mtc_in_got_first_full
+    // guarantees mtc_in_m/mtc_in_h were set by a prior full assembly. (BUG-004)
     mid_s == 0 && (mid_f == 0 || (mid_f == 2 && mtc_in_det_rate == 2)) ? (
       mtc_in_m += 1;
       mtc_in_m >= 60 ? (
@@ -697,6 +701,8 @@ update_params();
 
 
 @block
+// Per-block processing: source timeouts, MIDI input, priority resolution,
+// TC offset, MTC output generation, and gmem/slider writeback.
 
 // Detect sample rate changes
 srate != cached_srate ? (
@@ -896,6 +902,7 @@ out_peak_l *= meter_decay; out_peak_r *= meter_decay;
 
 
 @sample
+// Per-sample processing: LTC biphase-mark decode, LTC encode, level metering.
 
 // ── Input level metering (ch1+2) ──
 abs(spl0) > in_peak_l ? in_peak_l = abs(spl0);
