@@ -5,7 +5,7 @@
 [![CI](https://github.com/paskateknikko/ReaTC/actions/workflows/check.yml/badge.svg)](https://github.com/paskateknikko/ReaTC/actions/workflows/check.yml)
 [![Release](https://github.com/paskateknikko/ReaTC/actions/workflows/release.yml/badge.svg)](https://github.com/paskateknikko/ReaTC/actions/workflows/release.yml)
 [![macOS 10.15+](https://img.shields.io/badge/macOS-10.15%2B-black?logo=apple)](https://github.com/paskateknikko/ReaTC/releases)
-[![Windows 10+](https://img.shields.io/badge/Windows-10%2B-blue?logo=windows)](https://github.com/paskateknikko/ReaTC/releases)
+[![Windows 10+](https://img.shields.io/badge/Windows-10%2B-black?logo=windows)](https://github.com/paskateknikko/ReaTC/releases)
 
 Sync REAPER with your lighting console using Art-Net, MIDI Timecode, and OSC.
 
