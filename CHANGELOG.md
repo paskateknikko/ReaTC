@@ -13,6 +13,35 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 # ReaTC Changelog
 
 
+## [Unreleased] — WIP
+
+### Fixed
+- Python daemons now validate TC ranges (0-23h, 0-59m, 0-59s, 0-29f) and log malformed input to stderr
+- Daemon write failure now retries 3 times with backoff before disabling output (was: immediate disable)
+- `os.execute` return values checked in Bake LTC from Regions (mkdir and generation)
+- LTC generator CLI amplitude clamped to valid int16 range (1–32767)
+- OSC address validated to start with `/` per OSC spec
+- Build scripts use explicit `encoding="utf-8"` for Windows compatibility
+
+### Added
+- Named `GMEM_*` constants in Lua matching JSFX gmem layout
+- Settings key constants to prevent typo bugs in load/save
+- Daemon pre-start on enable (eliminates first-packet latency)
+- Output throttle now matches active framerate instead of fixed 30Hz
+- Python unit tests for Art-Net/OSC packet construction, LTC frame building, TC advance, drop-frame logic, and build system
+- Lua syntax validation (`luac -p`) in CI
+- pytest runner in CI
+- mise tool caching in CI
+- Manual installation and troubleshooting sections in README
+- LDoc annotations on all Lua public functions
+- Type hints and expanded docstrings on all Python functions
+- Doxygen comments on C++ extension with ExtState IPC contract
+- JSFX section headers and MTC mid-cycle rollover documentation
+- Architecture diagram updated with C++ extension, ExtState IPC, and reatc_ltcgen.py
+- `make test` and `make docs` Makefile targets
+- `config.ld` for LDoc generation
+- `REPORT.md` code review report (23 findings, all resolved)
+
 ## [1.0.0] - 2026-02-24
 
 First public release
