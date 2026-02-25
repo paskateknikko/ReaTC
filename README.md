@@ -1,4 +1,5 @@
 # ReaTC
+<a href="https://www.buymeacoffee.com/paskateknikko" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/paskateknikko/ReaTC?include_prereleases)](https://github.com/paskateknikko/ReaTC/releases)
