@@ -98,7 +98,7 @@ def verify(version="DEV"):
 
             # Check version substitution if expected
             if expected_version:
-                with open(filepath, "r") as f:
+                with open(filepath, "r", encoding="utf-8") as f:
                     content = f.read()
                 if expected_version not in content:
                     version_errors.append(filename)

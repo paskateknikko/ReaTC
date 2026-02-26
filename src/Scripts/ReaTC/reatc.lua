@@ -25,10 +25,12 @@
 -- @changelog
 --   {{CHANGELOG}}
 
--- ReaTC — https://github.com/paskateknikko/ReaTC
+--- ReaTC — https://github.com/paskateknikko/ReaTC
 -- Copyright (c) 2025 Tuukka Aimasmäki. MIT License — see LICENSE.
 --
--- Sends Art-Net TimeCode and OSC from REAPER.
+--- Entry point for ReaTC. Initializes submodules, attaches to JSFX gmem,
+-- and runs a deferred main loop that: reads TC from gmem, polls for
+-- ExtState toggle commands from the C++ extension, and sends network output.
 -- TC sources and outputs are configured in the ReaTC Timecode Converter JSFX.
 
 if not reaper.ImGui_GetBuiltinPath then
@@ -66,6 +68,9 @@ local function init()
   end
 
   ui.init()
+
+  -- Pre-start daemons if outputs were enabled from saved settings
+  outputs.prestart_daemons()
 end
 
 local function loop()
@@ -77,15 +82,16 @@ local function loop()
     return  -- do NOT defer again
   end
 
-  -- Signal to JSFX that Lua script is alive (gmem index 8)
-  reaper.gmem_write(8, (reaper.gmem_read(8) + 1) % 65536)
+  -- Signal to JSFX that Lua script is alive
+  reaper.gmem_write(core.GMEM_SCRIPT_ALIVE,
+    (reaper.gmem_read(core.GMEM_SCRIPT_ALIVE) + 1) % 65536)
 
-  -- Write TC offset to gmem for JSFX (indices 20-24)
-  reaper.gmem_write(20, core.state.tc_offset_h)
-  reaper.gmem_write(21, core.state.tc_offset_m)
-  reaper.gmem_write(22, core.state.tc_offset_s)
-  reaper.gmem_write(23, core.state.tc_offset_f)
-  reaper.gmem_write(24, core.state.tc_offset_negative and 1 or 0)
+  -- Write TC offset to gmem for JSFX
+  reaper.gmem_write(core.GMEM_TC_OFFSET_H, core.state.tc_offset_h)
+  reaper.gmem_write(core.GMEM_TC_OFFSET_M, core.state.tc_offset_m)
+  reaper.gmem_write(core.GMEM_TC_OFFSET_S, core.state.tc_offset_s)
+  reaper.gmem_write(core.GMEM_TC_OFFSET_F, core.state.tc_offset_f)
+  reaper.gmem_write(core.GMEM_TC_OFFSET_SIGN, core.state.tc_offset_negative and 1 or 0)
 
   -- Read active TC from JSFX via gmem
   core.update_tc_from_gmem()

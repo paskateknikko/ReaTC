@@ -1,4 +1,4 @@
-.PHONY: build clean verify all help watch extension
+.PHONY: build clean verify all help watch extension docs test
 
 VERSION ?= DEV
 ifdef v
@@ -14,6 +14,8 @@ help:
 	@echo "  make verify              - Verify dist/ contains all expected files"
 	@echo "  make all                 - Build and verify (default)"
 	@echo "  make extension           - Build C++ extension (reaper_reatc)"
+	@echo "  make test                - Run Python unit tests"
+	@echo "  make docs                - Generate Lua API docs (requires ldoc)"
 	@echo "  make watch               - Rebuild on changes (requires watchexec)"
 	@echo "  make clean               - Remove dist/ and extension build"
 	@echo ""
@@ -30,6 +32,12 @@ extension:
 	cmake -S src/extension -B dist/extension-build
 	cmake --build dist/extension-build
 	@echo "✓ Built extension"
+
+test:
+	python3 -m pytest tests/ -v
+
+docs:
+	ldoc .
 
 clean:
 	rm -rf dist/ dist/extension-build/

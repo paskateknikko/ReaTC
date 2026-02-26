@@ -31,7 +31,7 @@ def read_changelog_for_version(version):
     changelog_file = REPO_ROOT / "CHANGELOG.md"
     if not changelog_file.exists():
         return f"Release {version}"
-    with open(changelog_file, "r") as f:
+    with open(changelog_file, "r", encoding="utf-8") as f:
         content = f.read()
     lines = content.splitlines()
     notes = []
@@ -84,7 +84,7 @@ def build(version="DEV"):
                 continue
             for filepath in sorted(src_dir.iterdir()):
                 if filepath.is_file():
-                    with open(filepath, "r") as f:
+                    with open(filepath, "r", encoding="utf-8") as f:
                         content = f.read()
                     content = substitute_version(content, version)
                     # Join multi-line changelog with comment prefix matching file type
@@ -94,7 +94,7 @@ def build(version="DEV"):
                         changelog_commented = "\n-- ".join(changelog.split("\n"))
                     content = content.replace("{{CHANGELOG}}", changelog_commented)
                     dist_file = dist_dir / filepath.name
-                    with open(dist_file, "w") as f:
+                    with open(dist_file, "w", encoding="utf-8") as f:
                         f.write(content)
                     print(f"  ✓ {filepath.name}")
                     files_processed += 1

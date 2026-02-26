@@ -50,6 +50,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Cache mise tools
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/mise
+          key: mise-${{ runner.os }}-${{ hashFiles('.mise.toml') }}
+          restore-keys: mise-${{ runner.os }}-
+
       - uses: jdx/mise-action@v2
 
       - name: Set version from tag
@@ -165,10 +172,18 @@ jobs:
         with:
           ruby-version: '3.2'
 
-      - name: Install pandoc and reapack-index
-        run: |
-          sudo apt-get install -y pandoc
-          gem install reapack-index
+      - name: Cache Ruby gems
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/gem
+          key: gems-${{ runner.os }}-reapack-index
+          restore-keys: gems-${{ runner.os }}-
+
+      - name: Set up pandoc
+        uses: pandoc/actions/setup@v1
+
+      - name: Install reapack-index
+        run: gem install reapack-index
 
       - name: Publish to reapack branch
         run: |
@@ -191,14 +206,21 @@ jobs:
           fi
 
           # Remove old package files so stale artifacts don't persist
-          rm -rf /tmp/reapack-pub/Scripts /tmp/reapack-pub/Effects
+          # (also clean legacy dirs from older releases)
+          rm -rf /tmp/reapack-pub/ReaTC /tmp/reapack-pub/Timecode /tmp/reapack-pub/Scripts /tmp/reapack-pub/Effects
 
-          # Copy built files (reapack-index uses git SHA for per-version URLs)
-          cp -r dist/Scripts dist/Effects /tmp/reapack-pub/
+          # Copy built files into a flat category directory.
+          # ReaPack adds the Scripts/ or Effects/ prefix automatically based
+          # on package type, so the branch must NOT include those prefixes.
+          # Category is "Timecode" (not "ReaTC") to avoid path doubling with
+          # the index name — install path: Scripts/ReaTC/Timecode/reatc.lua
+          mkdir -p /tmp/reapack-pub/Timecode
+          cp dist/Scripts/ReaTC/* /tmp/reapack-pub/Timecode/
+          cp dist/Effects/ReaTC/* /tmp/reapack-pub/Timecode/
           cp dist/ABOUT.md /tmp/reapack-pub/
 
           # Copy extension binaries alongside scripts (referenced by @provides)
-          cp extension-binaries/reaper_reatc* /tmp/reapack-pub/Scripts/ReaTC/
+          cp extension-binaries/reaper_reatc* /tmp/reapack-pub/Timecode/
 
           # Generate a reapack-branch-specific README
           cat > /tmp/reapack-pub/README.md << 'REAPACK_README'

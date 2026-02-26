@@ -27,6 +27,23 @@ https://github.com/paskateknikko/ReaTC/raw/reapack/index.xml
 4. Extensions > ReaPack > Browse packages → search "ReaTC" → Install
 
 
+### Manual Installation
+
+1. Download the latest release from [GitHub Releases](https://github.com/paskateknikko/ReaTC/releases)
+2. Copy `Scripts/ReaTC/` to your REAPER Scripts directory:
+   - **Windows:** `%APPDATA%\REAPER\Scripts\`
+   - **macOS:** `~/Library/Application Support/REAPER/Scripts/`
+3. Copy `Effects/ReaTC/` to your REAPER Effects directory:
+   - **Windows:** `%APPDATA%\REAPER\Effects\`
+   - **macOS:** `~/Library/Application Support/REAPER/Effects/`
+4. *(Optional)* Copy the C++ extension binary to REAPER UserPlugins:
+   - **Windows:** `%APPDATA%\REAPER\UserPlugins\reaper_reatc64.dll`
+   - **macOS ARM:** `~/Library/Application Support/REAPER/UserPlugins/reaper_reatc-arm64.dylib`
+   - **macOS Intel:** `~/Library/Application Support/REAPER/UserPlugins/reaper_reatc-x86_64.dylib`
+   - Restart REAPER after adding the extension — native plugins are only loaded at startup.
+5. In REAPER: Actions > Show action list > Load ReaScript > select `reatc.lua`
+
+
 ---
 
 
@@ -131,6 +148,29 @@ In the JSFX plugin UI, enable the outputs you need:
 
 ![Bake LTC from Regions — per-region TC start and framerate](images/regions-to-ltc.png)
 
+
+## Troubleshooting
+
+**"Python 3 not found"**
+- macOS: Python 3 is pre-installed on macOS 12.3+. For older versions, install from [python.org](https://python.org).
+- Windows: Install from the Microsoft Store (`python3`) or [python.org](https://python.org). Make sure Python is added to your PATH. Restart REAPER after installing.
+
+**"JSFX not detected"**
+- Add the **ReaTC Timecode Converter** JSFX to any track (FX browser > search "ReaTC").
+- Make sure the JSFX is enabled (not bypassed) and the track is not muted.
+
+**No Art-Net packets being received**
+- Check the destination IP matches your console's Art-Net interface.
+- Verify your firewall allows outbound UDP on port 6454.
+- For broadcast, use the subnet broadcast address (e.g., `2.255.255.255`).
+
+**No OSC messages being received**
+- Verify the destination IP, port, and OSC address match the target application's settings.
+- Check your firewall allows outbound UDP on the configured port.
+
+**LTC not decoding**
+- Route LTC audio to the track with the JSFX. Check the peak meter in the plugin UI.
+- Adjust the LTC threshold slider if the signal is too quiet.
 
 ## Requirements
 

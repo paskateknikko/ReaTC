@@ -12,6 +12,22 @@
  * Copyright (c) 2025 Tuukka Aimasmäki. MIT License — see LICENSE.
  */
 
+/**
+ * @file reaper_reatc.cpp
+ * @brief REAPER extension that registers ReaTC custom actions and brokers
+ *        IPC between the action system and the Lua scripts via ExtState.
+ *
+ * ExtState IPC contract
+ * ---------------------
+ * **ReaTC_CMD** (extension -> script, consumed once by Lua):
+ *   - "toggle_artnet" = "1"   Request the Lua script to toggle Art-Net output.
+ *   - "toggle_osc"    = "1"   Request the Lua script to toggle OSC output.
+ *
+ * **ReaTC_STATE** (script -> extension, read-only by C++):
+ *   - "artnet"  = "0"|"1"    Current Art-Net output state (for toggle_action).
+ *   - "osc"     = "0"|"1"    Current OSC output state (for toggle_action).
+ */
+
 #include "reaper_plugin.h"
 #include <cstring>
 #include <string>
@@ -26,6 +42,7 @@ static void     (*SetExtState)(const char* section, const char* key, const char*
 static const char* (*GetExtState)(const char* section, const char* key);
 static void     (*DeleteExtState)(const char* section, const char* key, bool persist);
 static int      (*plugin_register)(const char* name, void* infostruct);
+static void     (*ShowConsoleMsg)(const char* msg); // optional — for diagnostics
 
 // ---------------------------------------------------------------------------
 // Action definitions
@@ -42,15 +59,30 @@ static custom_action_register_t g_actions[ACT_COUNT] = {
 static int g_cmd_ids[ACT_COUNT] = {};   // filled by Register("custom_action")
 static int g_script_ids[2] = { 0, 0 };  // cached command IDs for the two Lua scripts
 
-// Script filenames (relative to <ResourcePath>/Scripts/ReaTC/)
+// Script filenames (relative to <ResourcePath>/Scripts/ReaTC/Timecode/)
 static const char* g_script_files[2] = {
   "reatc.lua",
   "reatc_regions_to_ltc.lua",
 };
 
 // ---------------------------------------------------------------------------
+// Logging helper (no-op if ShowConsoleMsg unavailable)
+// ---------------------------------------------------------------------------
+static void log_msg(const char* msg)
+{
+  if (ShowConsoleMsg) ShowConsoleMsg(msg);
+}
+
+// ---------------------------------------------------------------------------
 // Script resolution: find and run a Lua script via AddRemoveReaScript
 // ---------------------------------------------------------------------------
+/**
+ * @brief Resolve a Lua script path and execute it via Main_OnCommand.
+ * @param index  0 = reatc.lua (main UI), 1 = reatc_regions_to_ltc.lua
+ *
+ * The command ID is cached after the first call so that AddRemoveReaScript
+ * is only invoked once per script per session.
+ */
 static void run_script(int index)
 {
   if (!GetResourcePath || !AddRemoveReaScript || !Main_OnCommand) return;
@@ -59,12 +91,18 @@ static void run_script(int index)
   if (g_script_ids[index] == 0) {
     std::string path = GetResourcePath();
 #ifdef _WIN32
-    path += "\\Scripts\\ReaTC\\";
+    path += "\\Scripts\\ReaTC\\Timecode\\";
 #else
-    path += "/Scripts/ReaTC/";
+    path += "/Scripts/ReaTC/Timecode/";
 #endif
     path += g_script_files[index];
     g_script_ids[index] = AddRemoveReaScript(true, 0, path.c_str(), false);
+
+    if (g_script_ids[index] == 0) {
+      std::string err = "ReaTC: script not found: " + path + "\n";
+      log_msg(err.c_str());
+      return;
+    }
   }
 
   if (g_script_ids[index] > 0)
@@ -74,6 +112,15 @@ static void run_script(int index)
 // ---------------------------------------------------------------------------
 // hookcommand2 — intercept our custom action triggers
 // ---------------------------------------------------------------------------
+/**
+ * @brief REAPER hookcommand2 callback — intercept our registered action IDs.
+ *
+ * ACT_MAIN and ACT_BAKE launch Lua scripts directly.  ACT_ARTNET and
+ * ACT_OSC write a one-shot flag into ReaTC_CMD ExtState, which the
+ * running Lua script polls and consumes on its next defer cycle.
+ *
+ * @return true if the command was handled, false to let REAPER continue.
+ */
 static bool hook_command2(KbdSectionInfo* sec, int command, int val, int val2, int relmode, HWND hwnd)
 {
   if (command == g_cmd_ids[ACT_MAIN]) {
@@ -98,6 +145,14 @@ static bool hook_command2(KbdSectionInfo* sec, int command, int val, int val2, i
 // ---------------------------------------------------------------------------
 // toggleaction — report on/off state for toggle actions in Actions list
 // ---------------------------------------------------------------------------
+/**
+ * @brief REAPER toggleaction callback — report on/off state for the Actions list.
+ *
+ * Reads ReaTC_STATE ExtState keys written by the Lua script to reflect
+ * the current toggle state of Art-Net and OSC outputs.
+ *
+ * @return 1 = on, 0 = off, -1 = not our action.
+ */
 static int toggle_action(int command_id)
 {
   if (!GetExtState) return -1;
@@ -116,6 +171,15 @@ static int toggle_action(int command_id)
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
+/**
+ * @brief Extension entry point called by REAPER on load and unload.
+ *
+ * On load (rec != NULL): resolves API function pointers, registers four
+ * custom actions, and installs hookcommand2 + toggleaction callbacks.
+ * On unload (rec == NULL): removes cached script registrations.
+ *
+ * @return 1 on success, 0 on failure or unload.
+ */
 extern "C" REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
     HINSTANCE hInstance, reaper_plugin_info_t* rec)
 {
@@ -127,9 +191,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
         if (g_script_ids[i] > 0) {
           std::string path = GetResourcePath();
 #ifdef _WIN32
-          path += "\\Scripts\\ReaTC\\";
+          path += "\\Scripts\\ReaTC\\Timecode\\";
 #else
-          path += "/Scripts/ReaTC/";
+          path += "/Scripts/ReaTC/Timecode/";
 #endif
           path += g_script_files[i];
           AddRemoveReaScript(false, 0, path.c_str(), false);
@@ -157,17 +221,38 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
 
   #undef LOAD_API
 
+  // Optional API — used for diagnostics only
+  *((void**)&ShowConsoleMsg) = rec->GetFunc("ShowConsoleMsg");
+
   plugin_register = rec->Register;
 
   // Register custom actions
   for (int i = 0; i < ACT_COUNT; ++i) {
     g_cmd_ids[i] = rec->Register("custom_action", &g_actions[i]);
-    if (g_cmd_ids[i] == 0) return 0; // registration failed
+    if (g_cmd_ids[i] == 0) {
+      log_msg("ReaTC: failed to register custom action\n");
+      return 0;
+    }
   }
 
   // Register callbacks
-  rec->Register("hookcommand2", (void*)hook_command2);
-  rec->Register("toggleaction", (void*)toggle_action);
+  if (!rec->Register("hookcommand2", (void*)hook_command2)) {
+    log_msg("ReaTC: failed to register hookcommand2\n");
+    return 0;
+  }
+  if (!rec->Register("toggleaction", (void*)toggle_action)) {
+    log_msg("ReaTC: failed to register toggleaction\n");
+    return 0;
+  }
+
+  // Log successful load with assigned command IDs
+  {
+    std::string msg = "ReaTC extension loaded — action IDs:";
+    for (int i = 0; i < ACT_COUNT; ++i)
+      msg += " " + std::to_string(g_cmd_ids[i]);
+    msg += "\n";
+    log_msg(msg.c_str());
+  }
 
   return 1; // success
 }
