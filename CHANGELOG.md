@@ -18,7 +18,7 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 ### Fixed
 - C++ extension actions appeared in Actions list but did nothing when triggered — added `hookcommand2`/`toggleaction` registration error checking and diagnostic logging via REAPER console
 - C++ extension `run_script()` now logs the exact path tried when a Lua script is not found, instead of silently failing
-- ReaPack install path doubled (`Scripts/ReaTC/Scripts/ReaTC/`) — reapack branch now uses flat `ReaTC/` category directory; ReaPack adds the `Scripts/`/`Effects/` prefix automatically by package type
+- ReaPack install path doubled (`Scripts/ReaTC/ReaTC/`) — reapack branch category renamed from `ReaTC/` to `Timecode/` so install path is `Scripts/ReaTC/Timecode/` (index name + category no longer collide); C++ extension paths updated to match
 - JSFX LTC decoder: fixed bpm_period seed from full-cell to half-cell width — 25fps now locks immediately at any level
 - JSFX LTC encoder: added play-start transition reset and frame rebuild on rate change
 - Python daemons now validate TC ranges (0-23h, 0-59m, 0-59s, 0-29f) and log malformed input to stderr

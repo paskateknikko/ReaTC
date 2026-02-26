@@ -59,7 +59,7 @@ static custom_action_register_t g_actions[ACT_COUNT] = {
 static int g_cmd_ids[ACT_COUNT] = {};   // filled by Register("custom_action")
 static int g_script_ids[2] = { 0, 0 };  // cached command IDs for the two Lua scripts
 
-// Script filenames (relative to <ResourcePath>/Scripts/ReaTC/)
+// Script filenames (relative to <ResourcePath>/Scripts/ReaTC/Timecode/)
 static const char* g_script_files[2] = {
   "reatc.lua",
   "reatc_regions_to_ltc.lua",
@@ -91,9 +91,9 @@ static void run_script(int index)
   if (g_script_ids[index] == 0) {
     std::string path = GetResourcePath();
 #ifdef _WIN32
-    path += "\\Scripts\\ReaTC\\";
+    path += "\\Scripts\\ReaTC\\Timecode\\";
 #else
-    path += "/Scripts/ReaTC/";
+    path += "/Scripts/ReaTC/Timecode/";
 #endif
     path += g_script_files[index];
     g_script_ids[index] = AddRemoveReaScript(true, 0, path.c_str(), false);
@@ -191,9 +191,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
         if (g_script_ids[i] > 0) {
           std::string path = GetResourcePath();
 #ifdef _WIN32
-          path += "\\Scripts\\ReaTC\\";
+          path += "\\Scripts\\ReaTC\\Timecode\\";
 #else
-          path += "/Scripts/ReaTC/";
+          path += "/Scripts/ReaTC/Timecode/";
 #endif
           path += g_script_files[i];
           AddRemoveReaScript(false, 0, path.c_str(), false);
