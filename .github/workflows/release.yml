@@ -191,14 +191,19 @@ jobs:
           fi
 
           # Remove old package files so stale artifacts don't persist
-          rm -rf /tmp/reapack-pub/Scripts /tmp/reapack-pub/Effects
+          # (also clean legacy Scripts/Effects dirs from older releases)
+          rm -rf /tmp/reapack-pub/ReaTC /tmp/reapack-pub/Scripts /tmp/reapack-pub/Effects
 
-          # Copy built files (reapack-index uses git SHA for per-version URLs)
-          cp -r dist/Scripts dist/Effects /tmp/reapack-pub/
+          # Copy built files into a flat category directory.
+          # ReaPack adds the Scripts/ or Effects/ prefix automatically based
+          # on package type, so the branch must NOT include those prefixes.
+          mkdir -p /tmp/reapack-pub/ReaTC
+          cp dist/Scripts/ReaTC/* /tmp/reapack-pub/ReaTC/
+          cp dist/Effects/ReaTC/* /tmp/reapack-pub/ReaTC/
           cp dist/ABOUT.md /tmp/reapack-pub/
 
           # Copy extension binaries alongside scripts (referenced by @provides)
-          cp extension-binaries/reaper_reatc* /tmp/reapack-pub/Scripts/ReaTC/
+          cp extension-binaries/reaper_reatc* /tmp/reapack-pub/ReaTC/
 
           # Generate a reapack-branch-specific README
           cat > /tmp/reapack-pub/README.md << 'REAPACK_README'

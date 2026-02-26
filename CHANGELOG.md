@@ -16,6 +16,9 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 ## [Unreleased v1.1.0] — WIP
 
 ### Fixed
+- C++ extension actions appeared in Actions list but did nothing when triggered — added `hookcommand2`/`toggleaction` registration error checking and diagnostic logging via REAPER console
+- C++ extension `run_script()` now logs the exact path tried when a Lua script is not found, instead of silently failing
+- ReaPack install path doubled (`Scripts/ReaTC/Scripts/ReaTC/`) — reapack branch now uses flat `ReaTC/` category directory; ReaPack adds the `Scripts/`/`Effects/` prefix automatically by package type
 - JSFX LTC decoder: fixed bpm_period seed from full-cell to half-cell width — 25fps now locks immediately at any level
 - JSFX LTC encoder: added play-start transition reset and frame rebuild on rate change
 - Python daemons now validate TC ranges (0-23h, 0-59m, 0-59s, 0-29f) and log malformed input to stderr
@@ -26,6 +29,7 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 - Build scripts use explicit `encoding="utf-8"` for Windows compatibility
 
 ### Added
+- C++ extension prints load confirmation with assigned command IDs to REAPER console
 - Named `GMEM_*` constants in Lua matching JSFX gmem layout
 - Settings key constants to prevent typo bugs in load/save
 - Daemon pre-start on enable (eliminates first-packet latency)
