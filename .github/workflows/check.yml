@@ -25,6 +25,11 @@ jobs:
 
       - uses: jdx/mise-action@v2
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
       - name: Build smoke test
         run: make build VERSION=DEV
 
@@ -42,9 +47,8 @@ jobs:
 
       - name: Validate Lua syntax (all files)
         run: |
-          sudo apt-get -qq install -y lua5.3
           find src/ -name '*.lua' | sort | while read f; do
-            luac5.3 -p "$f" && echo "  ✓ $f"
+            luac -p "$f" && echo "  ✓ $f"
           done
           echo "✓ All Lua files passed syntax check"
 
@@ -60,13 +64,7 @@ jobs:
           pip install pytest
           python3 -m pytest tests/ -v
 
-  build-extension:
-    runs-on: ubuntu-latest
-    name: Build C++ extension
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build extension
+      - name: Build C++ extension
         run: |
           cmake -S src/extension -B src/extension/build -DCMAKE_BUILD_TYPE=Release
           cmake --build src/extension/build --config Release

@@ -28,6 +28,12 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 - OSC address validated to start with `/` per OSC spec
 - Build scripts use explicit `encoding="utf-8"` for Windows compatibility
 
+### Changed
+- CI: merged `build-extension` job into `validate` in check.yml (saves one VM boot)
+- CI: lua syntax check now uses mise-installed lua instead of apt
+- CI: added pip cache for pytest, mise cache for release.yml, gem cache for reapack-index
+- CI: pandoc installed via `pandoc/actions/setup@v1` instead of apt
+
 ### Added
 - C++ extension prints load confirmation with assigned command IDs to REAPER console
 - Named `GMEM_*` constants in Lua matching JSFX gmem layout
