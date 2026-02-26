@@ -58,6 +58,8 @@ jobs:
           restore-keys: mise-${{ runner.os }}-
 
       - uses: jdx/mise-action@v2
+        with:
+          install_args: python
 
       - name: Set version from tag
         id: version
