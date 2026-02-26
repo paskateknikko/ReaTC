@@ -16,6 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install readline (needed to build Lua via mise)
+        run: sudo apt-get install -y libreadline-dev
+
       - name: Cache mise tools
         uses: actions/cache@v4
         with:
