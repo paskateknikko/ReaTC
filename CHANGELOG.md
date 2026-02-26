@@ -13,7 +13,7 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 # ReaTC Changelog
 
 
-## [Unreleased v1.1.0] — WIP
+## [v1.1.0] — 2026-02-27
 
 ### Fixed
 - C++ extension actions appeared in Actions list but did nothing when triggered — added `hookcommand2`/`toggleaction` registration error checking and diagnostic logging via REAPER console
