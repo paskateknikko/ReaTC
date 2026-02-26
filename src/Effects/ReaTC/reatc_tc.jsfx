@@ -182,9 +182,10 @@ function update_params() (
   fps_real = fps_type == 0 ? 24 : fps_type == 1 ? 25 : fps_type == 2 ? 29.97 : 30;
 
   // LTC decoder thresholds (adaptive, seeded from configured rate)
+  // spb = samples per bit (full cell); bpm_period tracks the half-cell width
   thr  = 10 ^ (slider11 / 20.0);
   spb  = srate / (fps_int * 80.0);
-  bpm_period = spb;
+  bpm_period = spb * 0.5;
   mid  = bpm_period * 1.5;
   minb = bpm_period * 0.5;
   maxb = bpm_period * 3.0;
@@ -962,8 +963,8 @@ ns != 0 && ns != sig_state ? (
     maxb = bpm_period * 3.0;
     bpm_state == 0 ? push_bit(0) : (push_bit(1); push_bit(0); bpm_state = 0;);
   ) : (
-    // Dropout — re-seed from configured rate
-    bpm_period = spb;
+    // Dropout — re-seed half-cell width from configured rate
+    bpm_period = spb * 0.5;
     mid  = bpm_period * 1.5;
     minb = bpm_period * 0.5;
     maxb = bpm_period * 3.0;

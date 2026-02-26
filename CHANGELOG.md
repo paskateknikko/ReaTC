@@ -13,9 +13,11 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 # ReaTC Changelog
 
 
-## [Unreleased] — WIP
+## [Unreleased v1.1.0] — WIP
 
 ### Fixed
+- JSFX LTC decoder: fixed bpm_period seed from full-cell to half-cell width — 25fps now locks immediately at any level
+- JSFX LTC encoder: added play-start transition reset and frame rebuild on rate change
 - Python daemons now validate TC ranges (0-23h, 0-59m, 0-59s, 0-29f) and log malformed input to stderr
 - Daemon write failure now retries 3 times with backoff before disabling output (was: immediate disable)
 - `os.execute` return values checked in Bake LTC from Regions (mkdir and generation)
