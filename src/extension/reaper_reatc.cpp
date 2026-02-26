@@ -42,6 +42,7 @@ static void     (*SetExtState)(const char* section, const char* key, const char*
 static const char* (*GetExtState)(const char* section, const char* key);
 static void     (*DeleteExtState)(const char* section, const char* key, bool persist);
 static int      (*plugin_register)(const char* name, void* infostruct);
+static void     (*ShowConsoleMsg)(const char* msg); // optional — for diagnostics
 
 // ---------------------------------------------------------------------------
 // Action definitions
@@ -63,6 +64,14 @@ static const char* g_script_files[2] = {
   "reatc.lua",
   "reatc_regions_to_ltc.lua",
 };
+
+// ---------------------------------------------------------------------------
+// Logging helper (no-op if ShowConsoleMsg unavailable)
+// ---------------------------------------------------------------------------
+static void log_msg(const char* msg)
+{
+  if (ShowConsoleMsg) ShowConsoleMsg(msg);
+}
 
 // ---------------------------------------------------------------------------
 // Script resolution: find and run a Lua script via AddRemoveReaScript
@@ -88,6 +97,12 @@ static void run_script(int index)
 #endif
     path += g_script_files[index];
     g_script_ids[index] = AddRemoveReaScript(true, 0, path.c_str(), false);
+
+    if (g_script_ids[index] == 0) {
+      std::string err = "ReaTC: script not found: " + path + "\n";
+      log_msg(err.c_str());
+      return;
+    }
   }
 
   if (g_script_ids[index] > 0)
@@ -206,17 +221,38 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
 
   #undef LOAD_API
 
+  // Optional API — used for diagnostics only
+  *((void**)&ShowConsoleMsg) = rec->GetFunc("ShowConsoleMsg");
+
   plugin_register = rec->Register;
 
   // Register custom actions
   for (int i = 0; i < ACT_COUNT; ++i) {
     g_cmd_ids[i] = rec->Register("custom_action", &g_actions[i]);
-    if (g_cmd_ids[i] == 0) return 0; // registration failed
+    if (g_cmd_ids[i] == 0) {
+      log_msg("ReaTC: failed to register custom action\n");
+      return 0;
+    }
   }
 
   // Register callbacks
-  rec->Register("hookcommand2", (void*)hook_command2);
-  rec->Register("toggleaction", (void*)toggle_action);
+  if (!rec->Register("hookcommand2", (void*)hook_command2)) {
+    log_msg("ReaTC: failed to register hookcommand2\n");
+    return 0;
+  }
+  if (!rec->Register("toggleaction", (void*)toggle_action)) {
+    log_msg("ReaTC: failed to register toggleaction\n");
+    return 0;
+  }
+
+  // Log successful load with assigned command IDs
+  {
+    std::string msg = "ReaTC extension loaded — action IDs:";
+    for (int i = 0; i < ACT_COUNT; ++i)
+      msg += " " + std::to_string(g_cmd_ids[i]);
+    msg += "\n";
+    log_msg(msg.c_str());
+  }
 
   return 1; // success
 }
