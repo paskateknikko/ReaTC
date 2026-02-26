@@ -71,16 +71,16 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           BASE_VERSION=$(echo "$VERSION" | sed 's/-.*//')
-          # Skip changelog check for pre-releases (e.g. 2.1.0-beta-1)
-          if echo "$VERSION" | grep -q '-'; then
-            echo "⏭ Pre-release detected, skipping CHANGELOG check"
-            exit 0
-          fi
           if ! grep -qE "## \[($VERSION|$BASE_VERSION)\]" CHANGELOG.md 2>/dev/null; then
-            echo "ERROR: CHANGELOG.md missing entry for v$VERSION (or base v$BASE_VERSION)"
-            exit 1
+            if echo "$VERSION" | grep -q '-'; then
+              echo "::warning::CHANGELOG.md has no entry for v$VERSION (or base v$BASE_VERSION) — consider adding one before the stable release"
+            else
+              echo "::error::CHANGELOG.md missing entry for v$VERSION (or base v$BASE_VERSION)"
+              exit 1
+            fi
+          else
+            echo "✓ CHANGELOG.md has entry for v$VERSION"
           fi
-          echo "✓ CHANGELOG.md has entry for v$VERSION"
 
       - name: Build package
         run: python3 build/build.py --version "${{ steps.version.outputs.version }}"
