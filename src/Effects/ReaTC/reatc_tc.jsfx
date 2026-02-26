@@ -124,6 +124,7 @@ gen_phase   = 0.0;
 gen_half    = 0;
 gen_out     = 1.0;
 enc_lpf     = 0.0;
+enc_playing = 0;  // tracks stopped→playing transition
 
 // ── MTC Input decoder state ──
 mtc_in_h=0; mtc_in_m=0; mtc_in_s=0; mtc_in_f=0;
@@ -698,6 +699,7 @@ file_var(0, prio_mode);
 @slider
 
 update_params();
+build_enc_frame();
 
 
 @block
@@ -805,6 +807,17 @@ out_valid ? apply_tc_offset();
 out_valid ? (
   enc_h = out_h; enc_m = out_m; enc_s = out_s; enc_f = out_f;
 );
+
+// LTC encoder: stopped → playing transition — reset and build fresh frame
+is_playing && !enc_playing ? (
+  gen_bit_pos = 0;
+  gen_half    = 0;
+  gen_phase   = 0.0;
+  gen_out     = 1.0;
+  enc_lpf     = 0.0;
+  build_enc_frame();
+);
+enc_playing = is_playing;
 
 // Sequence counter: increment when TC changes
 (out_h != prev_out_h || out_m != prev_out_m || out_s != prev_out_s || out_f != prev_out_f) ? (
