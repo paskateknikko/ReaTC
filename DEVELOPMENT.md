@@ -69,7 +69,7 @@ No third-party Python packages are required.
 
 GitHub Actions (`release.yml`) builds the project, publishes `dist/` to the `reapack` branch, and creates a GitHub Release automatically.
 
-CI (`check.yml`) validates version format, CHANGELOG entry, and Python syntax on every push to `main`/`dev`.
+CI (`check.yml`) runs on every push to `main`/`dev`: build smoke test, artifact verification, unsubstituted-placeholder check, Lua syntax, Python syntax, pytest, and C++ extension build. CHANGELOG validation only happens in `release.yml` (on tag push).
 
 ## Architecture
 
@@ -122,13 +122,15 @@ Requires CMake 3.15+ and a C++17 compiler. On macOS, Xcode Command Line Tools ar
 
 | Channel | Mechanism | Used For |
 |---|---|---|
-| Lua ↔ JSFX | `gmem` shared memory (`ReaTC_LTC` namespace) | TC values, lock status, peak level, TC offset |
+| Lua ↔ JSFX | `gmem` shared memory (`ReaTC_LTC` namespace) | TC values, lock status, TC offset |
+| C++ → Lua | `ExtState` (`ReaTC_CMD` section, consumed once) | Toggle Art-Net/OSC from action triggers |
+| Lua → C++ | `ExtState` (`ReaTC_STATE` section, read-only by C++) | Current toggle state for Actions list indicators |
 | Lua → Art-Net | Persistent subprocess (`reatc_artnet.py`) via `io.popen()` | UDP Art-Net TimeCode broadcast |
 | Lua → OSC | Persistent subprocess (`reatc_osc.py`) via `io.popen()` | UDP OSC timecode broadcast |
 
 #### Lua ↔ JSFX (`gmem`)
 
-`gmem_attach("ReaTC_LTC")` creates a shared namespace between Lua and the JSFX. The JSFX writes TC values (H/M/S/F at `gmem[0–3]`), lock status (`gmem[4]`), peak level (`gmem[5]`), and a sequence counter (`gmem[6]`). Lua writes TC offset (H/M/S/F/sign at `gmem[20–24]`) which the JSFX applies before all outputs.
+`gmem_attach("ReaTC_LTC")` creates a shared namespace between Lua and the JSFX. The JSFX writes TC values (H/M/S/F at `gmem[0–3]`), framerate (`gmem[4]`), play state (`gmem[5]`), validity flag (`gmem[6]`), write counter (`gmem[7]`), active source (`gmem[17]`), and lock status (`gmem[18–19]` for LTC/MTC). Lua writes a heartbeat (`gmem[8]`) and TC offset (H/M/S/F/sign at `gmem[20–24]`) which the JSFX applies before all outputs. Peak level is a local variable exposed via slider, not gmem.
 
 #### Lua → Art-Net Python (persistent subprocess)
 
