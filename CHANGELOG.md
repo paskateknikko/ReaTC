@@ -44,7 +44,7 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 - Lua syntax validation (`luac -p`) in CI
 - pytest runner in CI
 - mise tool caching in CI
-- Manual installation and troubleshooting sections in README
+- Manual installation, troubleshooting, and ReaPack restart step in README
 - LDoc annotations on all Lua public functions
 - Type hints and expanded docstrings on all Python functions
 - Doxygen comments on C++ extension with ExtState IPC contract
