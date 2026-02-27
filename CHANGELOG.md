@@ -15,48 +15,7 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 
 ## [1.1.0] — 2026-02-27
 
-### Fixed
-- C++ extension actions appeared in Actions list but did nothing when triggered — added `hookcommand2`/`toggleaction` registration error checking and diagnostic logging via REAPER console
-- C++ extension `run_script()` now logs the exact path tried when a Lua script is not found, instead of silently failing
-- ReaPack install path doubled (`Scripts/ReaTC/ReaTC/`) — reapack branch category renamed from `ReaTC/` to `Timecode/` so install path is `Scripts/ReaTC/Timecode/` (index name + category no longer collide); C++ extension paths updated to match
-- JSFX LTC decoder: fixed bpm_period seed from full-cell to half-cell width — 25fps now locks immediately at any level
-- JSFX LTC encoder: added play-start transition reset and frame rebuild on rate change
-- Python daemons now validate TC ranges (0-23h, 0-59m, 0-59s, 0-29f) and log malformed input to stderr
-- Daemon write failure now retries 3 times with backoff before disabling output (was: immediate disable)
-- `os.execute` return values checked in Bake LTC from Regions (mkdir and generation)
-- LTC generator CLI amplitude clamped to valid int16 range (1–32767)
-- OSC address validated to start with `/` per OSC spec
-- Build scripts use explicit `encoding="utf-8"` for Windows compatibility
-
-### Changed
-- CI: merged `build-extension` job into `validate` in check.yml (saves one VM boot)
-- CI: lua syntax check now uses mise-installed lua instead of apt
-- CI: added pip cache for pytest, mise cache for release.yml, gem cache for reapack-index
-- CI: pandoc installed via `pandoc/actions/setup@v1` instead of apt
-
-### Added
-- C++ extension prints load confirmation with assigned command IDs to REAPER console
-- Named `GMEM_*` constants in Lua matching JSFX gmem layout
-- Settings key constants to prevent typo bugs in load/save
-- Daemon pre-start on enable (eliminates first-packet latency)
-- Output throttle now matches active framerate instead of fixed 30Hz
-- Python unit tests for Art-Net/OSC packet construction, LTC frame building, TC advance, drop-frame logic, and build system
-- Lua syntax validation (`luac -p`) in CI
-- pytest runner in CI
-- mise tool caching in CI
-- Manual installation, troubleshooting, and ReaPack restart step in README
-- LDoc annotations on all Lua public functions
-- Type hints and expanded docstrings on all Python functions
-- Doxygen comments on C++ extension with ExtState IPC contract
-- JSFX section headers and MTC mid-cycle rollover documentation
-- Architecture diagram updated with C++ extension, ExtState IPC, and reatc_ltcgen.py
-- `make test` and `make docs` Makefile targets
-- `config.ld` for LDoc generation
-- `REPORT.md` code review report (23 findings, all resolved)
-
-## [1.0.0] - 2026-02-24
-
-First public release
+First public release.
 
 ### Timecode Sources
 
@@ -79,8 +38,44 @@ First public release
 - **Unified Timecode Converter JSFX** — single `reatc_tc.jsfx` plugin handles all TC sources and outputs with interactive @gfx UI
 - **Network sync status** — Art-Net and OSC indicators show packet counts and daemon health (green/red/orange)
 - **JSFX detection warning** — Lua script shows orange warning when the JSFX is not loaded or has Script Output disabled
-- **C++ extension** — registers custom REAPER action IDs (`_REATC_MAIN`, `_REATC_BAKE_LTC`, `_REATC_TOGGLE_ARTNET`, `_REATC_TOGGLE_OSC`) for OSC/MIDI controller automation
+- **C++ extension** — registers custom REAPER action IDs (`_REATC_MAIN`, `_REATC_BAKE_LTC`, `_REATC_TOGGLE_ARTNET`, `_REATC_TOGGLE_OSC`) for OSC/MIDI controller automation; prints load confirmation with assigned command IDs to REAPER console
 - **All standard frame rates** — 24fps (Film), 25fps (EBU/PAL), 29.97fps Drop Frame, 30fps (SMPTE)
 - **Dark UI** — Lua window and JSFX share a unified dark visual style; TC display and text scale proportionally when resizing
 - **Cross-platform** — macOS (10.15+) and Windows (10+); Python 3 standard library only
 - **ReaPack compatible** — install via package manager; ReaImGui auto-installed as dependency
+- Named `GMEM_*` constants in Lua matching JSFX gmem layout
+- Settings key constants to prevent typo bugs in load/save
+- Daemon pre-start on enable (eliminates first-packet latency)
+- Output throttle now matches active framerate instead of fixed 30Hz
+- Python unit tests for Art-Net/OSC packet construction, LTC frame building, TC advance, drop-frame logic, and build system
+- Lua syntax validation (`luac -p`) and pytest runner in CI
+- Manual installation, troubleshooting, and ReaPack restart step in README
+- LDoc annotations on all Lua public functions
+- Type hints and expanded docstrings on all Python functions
+- Doxygen comments on C++ extension with ExtState IPC contract
+- JSFX section headers and MTC mid-cycle rollover documentation
+- Architecture diagram updated with C++ extension, ExtState IPC, and reatc_ltcgen.py
+- `make test` and `make docs` Makefile targets
+- `config.ld` for LDoc generation
+- `REPORT.md` code review report (23 findings, all resolved)
+
+### Fixed
+
+- C++ extension actions appeared in Actions list but did nothing when triggered — added `hookcommand2`/`toggleaction` registration error checking and diagnostic logging
+- C++ extension `run_script()` now logs the exact path tried when a Lua script is not found
+- ReaPack install path doubled (`Scripts/ReaTC/ReaTC/`) — category renamed from `ReaTC/` to `Timecode/`; C++ extension paths updated to match
+- JSFX LTC decoder: fixed bpm_period seed from full-cell to half-cell width — 25fps now locks immediately at any level
+- JSFX LTC encoder: added play-start transition reset and frame rebuild on rate change
+- Python daemons now validate TC ranges (0-23h, 0-59m, 0-59s, 0-29f) and log malformed input to stderr
+- Daemon write failure now retries 3 times with backoff before disabling output (was: immediate disable)
+- `os.execute` return values checked in Bake LTC from Regions (mkdir and generation)
+- LTC generator CLI amplitude clamped to valid int16 range (1–32767)
+- OSC address validated to start with `/` per OSC spec
+- Build scripts use explicit `encoding="utf-8"` for Windows compatibility
+
+### Changed
+
+- CI: merged `build-extension` job into `validate` in check.yml (saves one VM boot)
+- CI: lua syntax check now uses mise-installed lua instead of apt
+- CI: added pip cache for pytest, mise cache for release.yml, gem cache for reapack-index
+- CI: pandoc installed via `pandoc/actions/setup@v1` instead of apt
