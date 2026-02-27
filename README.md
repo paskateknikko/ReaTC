@@ -25,6 +25,7 @@ Sync REAPER with your lighting console using Art-Net, MIDI Timecode, and OSC.
 https://github.com/paskateknikko/ReaTC/raw/reapack/index.xml
 ```
 4. Extensions > ReaPack > Browse packages → search "ReaTC" → Install
+5. **Restart REAPER** — the C++ extension is only loaded at startup
 
 
 ### Manual Installation
