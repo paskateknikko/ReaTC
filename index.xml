@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<index version="1" name="ReaTC" commit="f2fc5cac75da30a62f41d4fc26eee39f30c74dc8">
+  <category name="Timecode">
+    <reapack name="reatc.lua" type="script" desc="Art-Net and MIDI Timecode sender for REAPER">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel0 \b \fs36 ReaTC\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Sync REAPER with your lighting console using Art-Net, MIDI Timecode, and OSC.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Sources}: LTC audio, MIDI Timecode, REAPER Timeline (priority-based failover) {\b Outputs}: Art-Net, MTC, OSC, LTC audio, Region-based LTC bake\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Requires REAPER 6.32+, ReaImGui, Python 3. Cross-platform (macOS 10.15+, Windows 10+).\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\field{\*\fldinst{HYPERLINK "https://github.com/paskateknikko/ReaTC"}}{\fldrslt{\ul
+GitHub
+}}}
+\par}
+}
+]]></description>
+        <link rel="website">https://github.com/paskateknikko/ReaTC</link>
+      </metadata>
+      <version name="1.1.0" author="Tuukka Aimasmäki" time="2026-02-27T00:22:10Z">
+        <changelog><![CDATA[First public release.]]></changelog>
+        <source main="main">https://github.com/paskateknikko/ReaTC/raw/f2fc5cac75da30a62f41d4fc26eee39f30c74dc8/Timecode/reatc.lua</source>
+        <source main="main" file="reatc_regions_to_ltc.lua">https://github.com/paskateknikko/ReaTC/raw/f2fc5cac75da30a62f41d4fc26eee39f30c74dc8/Timecode/reatc_regions_to_ltc.lua</source>
+        <source file="reatc_core.lua">https://github.com/paskateknikko/ReaTC/raw/f2fc5cac75da30a62f41d4fc26eee39f30c74dc8/Timecode/reatc_core.lua</source>
+        <source file="reatc_ui.lua">https://github.com/paskateknikko/ReaTC/raw/f2fc5cac75da30a62f41d4fc26eee39f30c74dc8/Timecode/reatc_ui.lua</source>
+        <source file="reatc_outputs.lua">https://github.com/paskateknikko/ReaTC/raw/f2fc5cac75da30a62f41d4fc26eee39f30c74dc8/Timecode/reatc_outputs.lua</source>
+        <source file="reatc_artnet.py">https://github.com/paskateknikko/ReaTC/raw/f2fc5cac75da30a62f41d4fc26eee39f30c74dc8/Timecode/reatc_artnet.py</source>
+        <source file="reatc_ltcgen.py">https://github.com/paskateknikko/ReaTC/raw/f2fc5cac75da30a62f41d4fc26eee39f30c74dc8/Timecode/reatc_ltcgen.py</source>
+        <source file="reatc_osc.py">https://github.com/paskateknikko/ReaTC/raw/f2fc5cac75da30a62f41d4fc26eee39f30c74dc8/Timecode/reatc_osc.py</source>
+        <source platform="darwin-arm64" type="extension" file="reaper_reatc-arm64.dylib">https://github.com/paskateknikko/ReaTC/raw/f2fc5cac75da30a62f41d4fc26eee39f30c74dc8/Timecode/reaper_reatc-arm64.dylib</source>
+        <source platform="darwin64" type="extension" file="reaper_reatc-x86_64.dylib">https://github.com/paskateknikko/ReaTC/raw/f2fc5cac75da30a62f41d4fc26eee39f30c74dc8/Timecode/reaper_reatc-x86_64.dylib</source>
+        <source platform="win64" type="extension" file="reaper_reatc64.dll">https://github.com/paskateknikko/ReaTC/raw/f2fc5cac75da30a62f41d4fc26eee39f30c74dc8/Timecode/reaper_reatc64.dll</source>
+      </version>
+    </reapack>
+    <reapack name="reatc_tc.jsfx" type="effect" desc="ReaTC Timecode Converter">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel0 \b \fs36 ReaTC Timecode Converter\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Unified SMPTE/EBU timecode processor for REAPER.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Sources}: LTC audio decode, MTC decode, REAPER Timeline {\b Outputs}: LTC audio encode, MTC quarter-frame, gmem bridge to Lua script\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Insert this JSFX on any track. Configure sources and outputs via the plugin UI. Part of the {\field{\*\fldinst{HYPERLINK "https://github.com/paskateknikko/ReaTC"}}{\fldrslt{\ul
+ReaTC
+}}}
+ package.\par}
+}
+]]></description>
+      </metadata>
+      <version name="1.1.0" author="Tuukka Aimasmäki" time="2026-02-27T00:22:10Z">
+        <changelog><![CDATA[First public release.]]></changelog>
+        <source>https://github.com/paskateknikko/ReaTC/raw/f2fc5cac75da30a62f41d4fc26eee39f30c74dc8/Timecode/reatc_tc.jsfx</source>
+      </version>
+    </reapack>
+  </category>
+  <metadata>
+    <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel0 \b \fs36 ReaTC\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Sync REAPER with your lighting console using Art-Net, MIDI Timecode, and OSC.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Timecode Sources\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b LTC audio} \u8212- decode Linear Timecode from any audio track via JSFX; adaptive clock recovery for varispeed support\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b MIDI Timecode (MTC)} \u8212- decode incoming MTC quarter-frame and full-frame SysEx via JSFX\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b REAPER Timeline} \u8212- read timecode directly from the transport position\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Each source has a configurable priority (High / Normal / Low) with automatic failover.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Timecode Outputs\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Art-Net TimeCode} \u8212- broadcast SMPTE TC over UDP to lighting consoles\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b MIDI Timecode (MTC)} \u8212- sample-accurate quarter-frame output via JSFX\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b OSC} \u8212- configurable OSC timecode output over UDP\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b LTC audio} \u8212- encode timecode as audio on a track via JSFX\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Bake LTC from regions} \u8212- render offline LTC WAV files from project regions\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Features\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab All standard frame rates (24, 25, 29.97DF, 30)\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab TC Offset \u8212- user-configurable HH:MM:SS:FF offset applied before all outputs\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Source priority with automatic failover between LTC, MTC, and Timeline\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Network sync status with packet counts and daemon health indicators\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Cross-platform (macOS 10.15+, Windows 10+)\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Requirements\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab REAPER 6.32+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab ReaImGui (auto-installed via ReaPack)\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Python 3 (standard library only)\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Links\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "https://github.com/paskateknikko/ReaTC"}}{\fldrslt{\ul
+GitHub
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "https://github.com/paskateknikko/ReaTC/blob/main/LICENSE"}}{\fldrslt{\ul
+License: MIT
+}}}
+\sa180\par}
+}
+]]></description>
+  </metadata>
+</index>
