@@ -13,6 +13,12 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 # ReaTC Changelog
 
 
+## [1.1.1] — 2026-03-03
+
+### Fixed
+
+- MTC output running at half speed — QF cycle now correctly advances by 2 frames per 8-piece cycle
+
 ## [1.1.0] — 2026-02-27
 
 First public release.

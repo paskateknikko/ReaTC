@@ -856,6 +856,7 @@ slider8 > 0.5 && out_valid ? (
         qf_piece >= 8 ? (
           qf_piece = 0;
           advance_tc_frame();
+          advance_tc_frame();
         );
       );
     );
