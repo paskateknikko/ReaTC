@@ -8,7 +8,7 @@
 -- on write failure before disabling the output.
 -- @module reatc_outputs
 -- @noindex
--- @version 1.1.0
+-- @version 1.1.1
 
 return function(core)
   local M = {}

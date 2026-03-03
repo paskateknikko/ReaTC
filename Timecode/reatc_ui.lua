@@ -6,7 +6,7 @@
 -- `draw_ui()` returns false when the window is closed (signals the defer loop to stop).
 -- @module reatc_ui
 -- @noindex
--- @version 1.1.0
+-- @version 1.1.1
 
 return function(core, outputs)
   local M = {}

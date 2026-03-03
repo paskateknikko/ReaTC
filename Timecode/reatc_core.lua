@@ -6,11 +6,11 @@
 -- ReaTC runtime — UI, outputs, and the main loop all read/write it.
 -- @module reatc_core
 -- @noindex
--- @version 1.1.0
+-- @version 1.1.1
 
 local M = {}
 
-M.VERSION = "1.1.0"
+M.VERSION = "1.1.1"
 M.EXT_SECTION = "ReaTC"
 M.MIN_WIN_W, M.MIN_WIN_H = 440, 240
 
