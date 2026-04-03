@@ -1,6 +1,6 @@
 -- @description Art-Net and MIDI Timecode sender for REAPER
 -- @author Tuukka Aimasmäki
--- @version 1.2.0
+-- @version 1.2.1
 -- @link https://github.com/paskateknikko/ReaTC
 -- @about
 --   # ReaTC
@@ -23,35 +23,14 @@
 --   [extension darwin64] reaper_reatc-x86_64.dylib
 --   [extension win64] reaper_reatc64.dll
 -- @changelog
---   ### Added
+--   ### Changed
 -- 
--- - **Open Script button in JSFX** — launch the Lua script directly from the JSFX GUI when it's not running
--- - **LTC User Bits** — set user bits format (None/Characters/Date-Timezone) and 4-byte value in the JSFX settings; numeric input with Tab/Shift-Tab navigation; defaults to Characters mode matching REAPER
--- - **BGF Position Mode** — choose SMPTE (REAPER-compatible) or EBU standard bit positions at 25fps
--- - **LTC Diagnostics JSFX** — new analysis plugin with responsive UI, waveform display, frame bit histogram, timing histogram, decoder statistics, auto-detected frame rate, and auto-detected BGF positioning (SMPTE/EBU)
--- - **Clickable output toggles** — Art-Net and OSC can now be toggled directly from the main window
--- - **`make install`** — one-command build and install to your REAPER resource folder
--- 
--- ### Changed
--- 
--- - **All timecode outputs always active** — LTC and MTC run whenever valid TC is present, even when stopped; enables live format conversion (e.g. MTC→LTC)
--- - **LTC waveform** — slew-rate limiter replaces low-pass filter; produces clean trapezoidal wave matching REAPER's LTC generator (flat tops, no droop)
--- - **Unified install paths** — manual install now matches the ReaPack layout; one zip, extract and go
--- - **Cleaner main window** — less whitespace, TC scales to fit window, version shown inline
--- - **Settings closes on ESC**
--- - **OSC port** — plain text field instead of +/- stepper
+-- - **Local build naming** — `make all` / `make install` now names the extension binary with architecture suffix matching CI artifacts (e.g. `reaper_reatc-arm64.dylib`)
 -- 
 -- ### Fixed
 -- 
--- - **Source display stuck on "No active source"** — JSFX gmem variables silently overwritten due to EEL2 local variable pool overflow; all gmem indices and frame builder now use hardcoded values
--- - **Open Script button** — now works from any JSFX instance, not just the first one
--- - **LTC output level** — peak level now matches configured dBFS exactly
--- - **BGF flags at 25fps** — correct bit positions for both SMPTE and EBU conventions; parity no longer bleeds into BGF1
--- 
--- ### CI / DEV
--- 
--- - **`build/reapack.env`** — single source of truth for ReaPack index name and category
--- - **Dist structure** — `dist/ReaTC-{VERSION}/` with full REAPER resource folder layout; CI produces a single zip with all platforms
+-- - **LTC extended hours** — accept LTC timecode with hours 0-39 (full BCD range); REAPER and some systems output hours >= 24 which were previously rejected
+-- - **Duplicate extension loading** — C++ extension no longer fatally exits when action IDs are already registered (e.g. local + ReaPack install coexisting); logs a warning instead
 
 --- ReaTC — https://github.com/paskateknikko/ReaTC
 -- Copyright (c) 2025 Tuukka Aimasmäki. MIT License — see LICENSE.

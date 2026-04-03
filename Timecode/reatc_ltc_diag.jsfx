@@ -1,6 +1,6 @@
 desc:ReaTC LTC Diagnostics
 author:ReaTC
-version:1.2.0
+version:1.2.1
 about:
   LTC audio diagnostics — displays decoded timecode, signal level, bit timing,
   frame rate detection, lock status, and raw bit stream visualization.
@@ -390,7 +390,7 @@ gfx_x = cx; gfx_y = cy;
 gfx_drawstr("LTC Diagnostics");
 gfx_setfont(1, "Arial", floor(9 * ui_s), 0);
 gfx_r=0.35; gfx_g=0.37; gfx_b=0.42;
-strcpy(#ver_str, "v1.2.0");
+strcpy(#ver_str, "v1.2.1");
 gfx_measurestr(#ver_str, verw, verh);
 gfx_x = cx + cw - verw;
 gfx_y = cy + 2;

@@ -6,7 +6,7 @@
 -- `draw_ui()` returns false when the window is closed (signals the defer loop to stop).
 -- @module reatc_ui
 -- @noindex
--- @version 1.2.0
+-- @version 1.2.1
 
 return function(core, outputs)
   local M = {}
@@ -292,7 +292,7 @@ return function(core, outputs)
       local sg, oh, om, os, of = new_off:match("^([+-])(%d%d):(%d%d):(%d%d):(%d%d)$")
       if sg then
         oh, om, os, of = tonumber(oh), tonumber(om), tonumber(os), tonumber(of)
-        if oh <= 23 and om <= 59 and os <= 59 and of < fps_max then
+        if oh <= 39 and om <= 59 and os <= 59 and of < fps_max then
           s.tc_offset_negative = (sg == "-")
           s.tc_offset_h = oh
           s.tc_offset_m = om

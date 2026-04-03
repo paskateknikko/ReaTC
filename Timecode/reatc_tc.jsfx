@@ -1,6 +1,6 @@
 desc:ReaTC Timecode Converter
 author:Tuukka Aimasmäki
-version:1.2.0
+version:1.2.1
 // @about
 //   # ReaTC Timecode Converter
 //   Unified SMPTE/EBU timecode processor for REAPER.
@@ -11,35 +11,14 @@ version:1.2.0
 //   Insert this JSFX on any track. Configure sources and outputs via the plugin UI.
 //   Part of the [ReaTC](https://github.com/paskateknikko/ReaTC) package.
 // @changelog
-//   ### Added
+//   ### Changed
 // 
-// - **Open Script button in JSFX** — launch the Lua script directly from the JSFX GUI when it's not running
-// - **LTC User Bits** — set user bits format (None/Characters/Date-Timezone) and 4-byte value in the JSFX settings; numeric input with Tab/Shift-Tab navigation; defaults to Characters mode matching REAPER
-// - **BGF Position Mode** — choose SMPTE (REAPER-compatible) or EBU standard bit positions at 25fps
-// - **LTC Diagnostics JSFX** — new analysis plugin with responsive UI, waveform display, frame bit histogram, timing histogram, decoder statistics, auto-detected frame rate, and auto-detected BGF positioning (SMPTE/EBU)
-// - **Clickable output toggles** — Art-Net and OSC can now be toggled directly from the main window
-// - **`make install`** — one-command build and install to your REAPER resource folder
-// 
-// ### Changed
-// 
-// - **All timecode outputs always active** — LTC and MTC run whenever valid TC is present, even when stopped; enables live format conversion (e.g. MTC→LTC)
-// - **LTC waveform** — slew-rate limiter replaces low-pass filter; produces clean trapezoidal wave matching REAPER's LTC generator (flat tops, no droop)
-// - **Unified install paths** — manual install now matches the ReaPack layout; one zip, extract and go
-// - **Cleaner main window** — less whitespace, TC scales to fit window, version shown inline
-// - **Settings closes on ESC**
-// - **OSC port** — plain text field instead of +/- stepper
+// - **Local build naming** — `make all` / `make install` now names the extension binary with architecture suffix matching CI artifacts (e.g. `reaper_reatc-arm64.dylib`)
 // 
 // ### Fixed
 // 
-// - **Source display stuck on "No active source"** — JSFX gmem variables silently overwritten due to EEL2 local variable pool overflow; all gmem indices and frame builder now use hardcoded values
-// - **Open Script button** — now works from any JSFX instance, not just the first one
-// - **LTC output level** — peak level now matches configured dBFS exactly
-// - **BGF flags at 25fps** — correct bit positions for both SMPTE and EBU conventions; parity no longer bleeds into BGF1
-// 
-// ### CI / DEV
-// 
-// - **`build/reapack.env`** — single source of truth for ReaPack index name and category
-// - **Dist structure** — `dist/ReaTC-{VERSION}/` with full REAPER resource folder layout; CI produces a single zip with all platforms
+// - **LTC extended hours** — accept LTC timecode with hours 0-39 (full BCD range); REAPER and some systems output hours >= 24 which were previously rejected
+// - **Duplicate extension loading** — C++ extension no longer fatally exits when action IDs are already registered (e.g. local + ReaPack install coexisting); logs a warning instead
 
 // ReaTC — https://github.com/paskateknikko/ReaTC
 // Copyright (c) 2025 Tuukka Aimasmäki. MIT License — see LICENSE.
@@ -57,7 +36,7 @@ version:1.2.0
 //   - Script/gmem: shared memory for Lua script (Art-Net, OSC)
 //
 // gmem layout - namespace "ReaTC_LTC":
-//   [0] TC_HOUR          JSFX -> Script   hours 0-23
+//   [0] TC_HOUR          JSFX -> Script   hours 0-39
 //   [1] TC_MIN           JSFX -> Script   minutes 0-59
 //   [2] TC_SEC           JSFX -> Script   seconds 0-59
 //   [3] TC_FRAME         JSFX -> Script   frames 0-(fps-1)
@@ -69,7 +48,7 @@ version:1.2.0
 //   [17] ACTIVE_SOURCE   JSFX -> Script   0=none 1=LTC 2=MTC 3=Timeline
 //   [18] LTC_LOCK_STATUS JSFX -> Script   0/1
 //   [19] MTC_LOCK_STATUS JSFX -> Script   0/1
-//   [20] TC_OFFSET_H     Script -> JSFX   offset hours (0-23)
+//   [20] TC_OFFSET_H     Script -> JSFX   offset hours (0-39)
 //   [21] TC_OFFSET_M     Script -> JSFX   offset minutes (0-59)
 //   [22] TC_OFFSET_S     Script -> JSFX   offset seconds (0-59)
 //   [23] TC_OFFSET_F     Script -> JSFX   offset frames (0-fps)
@@ -421,12 +400,12 @@ function check_sync() local(wl, i, bv, fs,
     fr = f_t*10 + f_u; sr = s_t*10 + s_u;
     mr = m_t*10 + m_u; hr = h_t*10 + h_u;
     // Rate detection: extract before fps_int filter
-    fr < 30 && sr < 60 && mr < 60 && hr < 24 ? (
+    fr < 30 && sr < 60 && mr < 60 && hr < 40 ? (
       fr > ltc_det_max_f ? (ltc_det_max_f = fr);
       ltc_det_df_seen = ltc_det_df_seen | extract_bits(fs, 10, 1);
       ltc_det_frames += 1;
     );
-    fr < 30 && sr < 60 && mr < 60 && hr < 24 ? (
+    fr < 30 && sr < 60 && mr < 60 && hr < 40 ? (
       ltc_h = hr; ltc_m = mr; ltc_s = sr; ltc_f = fr;
       ltc_locked = 1;
       ltc_dec_seq = (ltc_dec_seq + 1) & 65535;
@@ -606,7 +585,7 @@ function resolve_active_source() local(best_src, best_pri, ltc_pri, mtc_pri, tl_
 
 
 // ── TC Offset ──
-// Converts h:m:s:f to total frames, adds/subtracts offset, wraps at 24h, converts back.
+// Converts h:m:s:f to total frames, adds/subtracts offset, wraps at 40h (LTC BCD max), converts back.
 // Result is stored in out_h/out_m/out_s/out_f (in-place).
 function apply_tc_offset() local(off_h, off_m, off_s, off_f, off_sign,
                                    total, off_total, max_frames,
@@ -633,11 +612,9 @@ function apply_tc_offset() local(off_h, off_m, off_s, off_f, off_sign,
 
       off_sign ? (total -= off_total) : (total += off_total);
 
-      // 24h boundary in DF: 24 * 60 * 29.97 = 24 * 107892 / 60... use exact:
-      // max frames in 24h DF = 24*60*30 - 24*6*2 = 43200*30 - 288 = 2589408 - ... nah
-      // Actually: 24h of 29.97DF = 2589408 frames
-      // 24*108000 - 2*(24*60 - 24*6) = 2592000 - 2*(1440-144) = 2592000 - 2592 = 2589408
-      max_frames = 2589408;
+      // 40h boundary in DF (LTC BCD max = 39:59:59:xx):
+      // 40*108000 - 2*(40*60 - 40*6) = 4320000 - 2*(2400-240) = 4320000 - 4320 = 4315680
+      max_frames = 4315680;
       total < 0 ? total += max_frames;
       total >= max_frames ? total -= max_frames;
 
@@ -647,7 +624,7 @@ function apply_tc_offset() local(off_h, off_m, off_s, off_f, off_sign,
       d  = floor(total / 17982);
       mm = total % 17982;
       tf = total + 18*d + 2*max(0, floor((mm - 2) / 1798));
-      out_h = floor(tf / 108000) % 24;
+      out_h = floor(tf / 108000) % 40;
       out_m = floor(tf / 1800)   % 60;
       out_s = floor(tf / 30)     % 60;
       out_f = tf % 30;
@@ -658,7 +635,7 @@ function apply_tc_offset() local(off_h, off_m, off_s, off_f, off_sign,
 
       off_sign ? (total -= off_total) : (total += off_total);
 
-      max_frames = 24 * 3600 * fps_int;
+      max_frames = 40 * 3600 * fps_int;
       total < 0 ? total += max_frames;
       total >= max_frames ? total -= max_frames;
 
@@ -667,7 +644,7 @@ function apply_tc_offset() local(off_h, off_m, off_s, off_f, off_sign,
       out_s = ts % 60;
       ts    = floor(ts / 60);
       out_m = ts % 60;
-      out_h = floor(ts / 60) % 24;
+      out_h = floor(ts / 60) % 40;
     );
   );
 );
@@ -1195,7 +1172,7 @@ gfx_rect(panel_x, panel_y, panel_w, panel_h, 1);
 
   gfx_setfont(1, "Arial", 9, 0);
   gfx_r=0.35; gfx_g=0.37; gfx_b=0.42;
-  strcpy(#ver_str, "v1.2.0");
+  strcpy(#ver_str, "v1.2.1");
   gfx_measurestr(#ver_str, verw, verh);
   gfx_x = panel_x + panel_w - verw - 10;
   gfx_y = panel_y + 8;

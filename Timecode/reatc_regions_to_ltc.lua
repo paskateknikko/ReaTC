@@ -3,7 +3,7 @@
 --
 -- Standalone script: Regions to LTC — generate LTC audio items from project regions
 -- @noindex
--- @version 1.2.0
+-- @version 1.2.1
 
 if not reaper.ImGui_GetBuiltinPath then
   reaper.MB(
@@ -162,7 +162,7 @@ local function parse_tc_string(str, fps_max)
   local h, m, s, f = str:match("^(%d%d):(%d%d):(%d%d):(%d%d)$")
   if not h then return nil end
   h, m, s, f = tonumber(h), tonumber(m), tonumber(s), tonumber(f)
-  if h > 23 or m > 59 or s > 59 or f >= fps_max then return nil end
+  if h > 39 or m > 59 or s > 59 or f >= fps_max then return nil end
   return h, m, s, f
 end
 
