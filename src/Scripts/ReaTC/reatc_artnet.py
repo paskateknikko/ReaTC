@@ -11,7 +11,7 @@
 #   <hours> <mins> <secs> <frames> <tc_type>
 #
 # Field ranges:
-#   hours   : 0-23
+#   hours   : 0-39
 #   mins    : 0-59
 #   secs    : 0-59
 #   frames  : 0-29
@@ -41,7 +41,7 @@ ARTNET_PORT = 6454
 def build_artnet_timecode(hours: int, mins: int, secs: int, frames: int, tc_type: int) -> bytes:
     """Build Art-Net TimeCode packet (19 bytes).
 
-    @param hours: Hours component (0-23).
+    @param hours: Hours component (0-39).
     @param mins: Minutes component (0-59).
     @param secs: Seconds component (0-59).
     @param frames: Frame number (0-29).
@@ -105,7 +105,7 @@ def main() -> None:
                 frames = int(parts[3])
                 tc_type = int(parts[4])
 
-                if not (0 <= hours <= 23 and 0 <= mins <= 59
+                if not (0 <= hours <= 39 and 0 <= mins <= 59
                         and 0 <= secs <= 59 and 0 <= frames <= 29
                         and 0 <= tc_type <= 3):
                     print(f"artnet: TC out of range: {line!r}", file=sys.stderr)

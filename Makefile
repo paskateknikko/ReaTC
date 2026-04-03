@@ -37,9 +37,23 @@ extension:
 
 DIST_DIR = dist/$(REAPACK_INDEX_NAME)-$(VERSION)
 
+# Platform-specific extension binary naming (matches CI artifacts)
+ifeq ($(OS),Windows_NT)
+EXT_BUILD = src/extension/build/Release/reaper_reatc64.dll
+EXT_NAME = reaper_reatc64.dll
+else
+EXT_ARCH := $(shell uname -m)
+ifeq ($(EXT_ARCH),arm64)
+EXT_NAME = reaper_reatc-arm64.dylib
+else
+EXT_NAME = reaper_reatc-x86_64.dylib
+endif
+EXT_BUILD = src/extension/build/reaper_reatc.dylib
+endif
+
 all: build verify extension
 	mkdir -p "$(DIST_DIR)/UserPlugins"
-	cp src/extension/build/reaper_reatc.dylib "$(DIST_DIR)/UserPlugins/"
+	cp "$(EXT_BUILD)" "$(DIST_DIR)/UserPlugins/$(EXT_NAME)"
 	@echo "✓ Complete: $(DIST_DIR)/"
 
 ifeq ($(OS),Windows_NT)

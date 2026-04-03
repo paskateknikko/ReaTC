@@ -58,6 +58,20 @@ class TestBuildLtcFrame:
         assert h_u == 3
         assert h_t == 2
 
+    def test_bcd_hours_extended(self):
+        """Hours >= 24 are BCD-encoded correctly (LTC supports 0-39)."""
+        bits = build_ltc_frame(25, 0, 0, 0, 1)  # hours=25
+        h_u = bits[48] | (bits[49] << 1) | (bits[50] << 2) | (bits[51] << 3)
+        h_t = bits[56] | (bits[57] << 1)
+        assert h_u == 5
+        assert h_t == 2
+
+        bits = build_ltc_frame(39, 0, 0, 0, 1)  # hours=39 (BCD max)
+        h_u = bits[48] | (bits[49] << 1) | (bits[50] << 2) | (bits[51] << 3)
+        h_t = bits[56] | (bits[57] << 1)
+        assert h_u == 9
+        assert h_t == 3
+
     def test_drop_frame_flag(self):
         """Bit 10 is set for drop-frame (type 2) and clear otherwise."""
         bits_df = build_ltc_frame(0, 0, 0, 0, 2)
@@ -67,7 +81,7 @@ class TestBuildLtcFrame:
 
     def test_bmpc_even_parity(self):
         """BMPC (bit 27) ensures even total parity of the 80-bit frame."""
-        for h in [0, 12, 23]:
+        for h in [0, 12, 23, 25, 39]:
             for m in [0, 30, 59]:
                 for s in [0, 30, 59]:
                     for f in [0, 12, 24]:

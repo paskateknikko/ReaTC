@@ -29,7 +29,7 @@ version:{{VERSION}}
 //   - Script/gmem: shared memory for Lua script (Art-Net, OSC)
 //
 // gmem layout - namespace "ReaTC_LTC":
-//   [0] TC_HOUR          JSFX -> Script   hours 0-23
+//   [0] TC_HOUR          JSFX -> Script   hours 0-39
 //   [1] TC_MIN           JSFX -> Script   minutes 0-59
 //   [2] TC_SEC           JSFX -> Script   seconds 0-59
 //   [3] TC_FRAME         JSFX -> Script   frames 0-(fps-1)
@@ -41,7 +41,7 @@ version:{{VERSION}}
 //   [17] ACTIVE_SOURCE   JSFX -> Script   0=none 1=LTC 2=MTC 3=Timeline
 //   [18] LTC_LOCK_STATUS JSFX -> Script   0/1
 //   [19] MTC_LOCK_STATUS JSFX -> Script   0/1
-//   [20] TC_OFFSET_H     Script -> JSFX   offset hours (0-23)
+//   [20] TC_OFFSET_H     Script -> JSFX   offset hours (0-39)
 //   [21] TC_OFFSET_M     Script -> JSFX   offset minutes (0-59)
 //   [22] TC_OFFSET_S     Script -> JSFX   offset seconds (0-59)
 //   [23] TC_OFFSET_F     Script -> JSFX   offset frames (0-fps)
@@ -393,12 +393,12 @@ function check_sync() local(wl, i, bv, fs,
     fr = f_t*10 + f_u; sr = s_t*10 + s_u;
     mr = m_t*10 + m_u; hr = h_t*10 + h_u;
     // Rate detection: extract before fps_int filter
-    fr < 30 && sr < 60 && mr < 60 && hr < 24 ? (
+    fr < 30 && sr < 60 && mr < 60 && hr < 40 ? (
       fr > ltc_det_max_f ? (ltc_det_max_f = fr);
       ltc_det_df_seen = ltc_det_df_seen | extract_bits(fs, 10, 1);
       ltc_det_frames += 1;
     );
-    fr < 30 && sr < 60 && mr < 60 && hr < 24 ? (
+    fr < 30 && sr < 60 && mr < 60 && hr < 40 ? (
       ltc_h = hr; ltc_m = mr; ltc_s = sr; ltc_f = fr;
       ltc_locked = 1;
       ltc_dec_seq = (ltc_dec_seq + 1) & 65535;
@@ -578,7 +578,7 @@ function resolve_active_source() local(best_src, best_pri, ltc_pri, mtc_pri, tl_
 
 
 // ── TC Offset ──
-// Converts h:m:s:f to total frames, adds/subtracts offset, wraps at 24h, converts back.
+// Converts h:m:s:f to total frames, adds/subtracts offset, wraps at 40h (LTC BCD max), converts back.
 // Result is stored in out_h/out_m/out_s/out_f (in-place).
 function apply_tc_offset() local(off_h, off_m, off_s, off_f, off_sign,
                                    total, off_total, max_frames,
@@ -605,11 +605,9 @@ function apply_tc_offset() local(off_h, off_m, off_s, off_f, off_sign,
 
       off_sign ? (total -= off_total) : (total += off_total);
 
-      // 24h boundary in DF: 24 * 60 * 29.97 = 24 * 107892 / 60... use exact:
-      // max frames in 24h DF = 24*60*30 - 24*6*2 = 43200*30 - 288 = 2589408 - ... nah
-      // Actually: 24h of 29.97DF = 2589408 frames
-      // 24*108000 - 2*(24*60 - 24*6) = 2592000 - 2*(1440-144) = 2592000 - 2592 = 2589408
-      max_frames = 2589408;
+      // 40h boundary in DF (LTC BCD max = 39:59:59:xx):
+      // 40*108000 - 2*(40*60 - 40*6) = 4320000 - 2*(2400-240) = 4320000 - 4320 = 4315680
+      max_frames = 4315680;
       total < 0 ? total += max_frames;
       total >= max_frames ? total -= max_frames;
 
@@ -619,7 +617,7 @@ function apply_tc_offset() local(off_h, off_m, off_s, off_f, off_sign,
       d  = floor(total / 17982);
       mm = total % 17982;
       tf = total + 18*d + 2*max(0, floor((mm - 2) / 1798));
-      out_h = floor(tf / 108000) % 24;
+      out_h = floor(tf / 108000) % 40;
       out_m = floor(tf / 1800)   % 60;
       out_s = floor(tf / 30)     % 60;
       out_f = tf % 30;
@@ -630,7 +628,7 @@ function apply_tc_offset() local(off_h, off_m, off_s, off_f, off_sign,
 
       off_sign ? (total -= off_total) : (total += off_total);
 
-      max_frames = 24 * 3600 * fps_int;
+      max_frames = 40 * 3600 * fps_int;
       total < 0 ? total += max_frames;
       total >= max_frames ? total -= max_frames;
 
@@ -639,7 +637,7 @@ function apply_tc_offset() local(off_h, off_m, off_s, off_f, off_sign,
       out_s = ts % 60;
       ts    = floor(ts / 60);
       out_m = ts % 60;
-      out_h = floor(ts / 60) % 24;
+      out_h = floor(ts / 60) % 40;
     );
   );
 );
