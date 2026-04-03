@@ -82,6 +82,7 @@ def verify(version="DEV"):
         "LICENSE": None,
         "README.md": None,
         "ABOUT.md": None,
+        "RELEASE_NOTES.md": None,
         f"{scripts_dir}/reatc.lua": version,
         f"{scripts_dir}/reatc_core.lua": version,
         f"{scripts_dir}/reatc_outputs.lua": version,

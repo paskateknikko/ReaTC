@@ -132,6 +132,23 @@ def build(version="DEV"):
                 shutil.copy2(src, dst)
                 print(f"  ✓ {filename}")
 
+        # Copy images/ to dist for README PDF generation
+        images_src = REPO_ROOT / "images"
+        images_dst = dist_dir / "images"
+        if images_src.exists():
+            shutil.copytree(images_src, images_dst,
+                            ignore=shutil.ignore_patterns("*.md"))
+            image_count = len(list(images_dst.iterdir()))
+            print(f"  ✓ images/ ({image_count} files)")
+
+        # Generate release notes
+        notes_file = dist_dir / "RELEASE_NOTES.md"
+        notes_file.write_text(
+            f"# ReaTC v{version} Release Notes\n\n{changelog}\n",
+            encoding="utf-8",
+        )
+        print(f"  ✓ RELEASE_NOTES.md")
+
         print()
         print(f"✓ Build complete: {dist_dir}")
         return 0
