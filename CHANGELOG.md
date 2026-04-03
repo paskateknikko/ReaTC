@@ -13,6 +13,37 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 # ReaTC Changelog
 
 
+## [1.2.0] - 2026-04-04
+
+### Added
+
+- **Open Script button in JSFX** — launch the Lua script directly from the JSFX GUI when it's not running
+- **LTC User Bits** — set user bits format (None/Characters/Date-Timezone) and 4-byte value in the JSFX settings; numeric input with Tab/Shift-Tab navigation; defaults to Characters mode matching REAPER
+- **BGF Position Mode** — choose SMPTE (REAPER-compatible) or EBU standard bit positions at 25fps
+- **LTC Diagnostics JSFX** — new analysis plugin with responsive UI, waveform display, frame bit histogram, timing histogram, decoder statistics, auto-detected frame rate, and auto-detected BGF positioning (SMPTE/EBU)
+- **Clickable output toggles** — Art-Net and OSC can now be toggled directly from the main window
+- **`make install`** — one-command build and install to your REAPER resource folder
+
+### Changed
+
+- **All timecode outputs always active** — LTC and MTC run whenever valid TC is present, even when stopped; enables live format conversion (e.g. MTC→LTC)
+- **LTC waveform** — slew-rate limiter replaces low-pass filter; produces clean trapezoidal wave matching REAPER's LTC generator (flat tops, no droop)
+- **Unified install paths** — manual install now matches the ReaPack layout; one zip, extract and go
+- **Cleaner main window** — less whitespace, TC scales to fit window, version shown inline
+- **Settings closes on ESC**
+- **OSC port** — plain text field instead of +/- stepper
+
+### Fixed
+
+- **Source display stuck on "No active source"** — JSFX gmem variables silently overwritten due to EEL2 local variable pool overflow; all gmem indices and frame builder now use hardcoded values
+- **Open Script button** — now works from any JSFX instance, not just the first one
+- **LTC output level** — peak level now matches configured dBFS exactly
+- **BGF flags at 25fps** — correct bit positions for both SMPTE and EBU conventions; parity no longer bleeds into BGF1
+
+### CI / DEV
+
+- **`build/reapack.env`** — single source of truth for ReaPack index name and category
+- **Dist structure** — `dist/ReaTC-{VERSION}/` with full REAPER resource folder layout; CI produces a single zip with all platforms
 ## [1.1.1] — 2026-03-03
 
 ### Fixed
@@ -49,39 +80,3 @@ First public release.
 - **Dark UI** — Lua window and JSFX share a unified dark visual style; TC display and text scale proportionally when resizing
 - **Cross-platform** — macOS (10.15+) and Windows (10+); Python 3 standard library only
 - **ReaPack compatible** — install via package manager; ReaImGui auto-installed as dependency
-- Named `GMEM_*` constants in Lua matching JSFX gmem layout
-- Settings key constants to prevent typo bugs in load/save
-- Daemon pre-start on enable (eliminates first-packet latency)
-- Output throttle now matches active framerate instead of fixed 30Hz
-- Python unit tests for Art-Net/OSC packet construction, LTC frame building, TC advance, drop-frame logic, and build system
-- Lua syntax validation (`luac -p`) and pytest runner in CI
-- Manual installation, troubleshooting, and ReaPack restart step in README
-- LDoc annotations on all Lua public functions
-- Type hints and expanded docstrings on all Python functions
-- Doxygen comments on C++ extension with ExtState IPC contract
-- JSFX section headers and MTC mid-cycle rollover documentation
-- Architecture diagram updated with C++ extension, ExtState IPC, and reatc_ltcgen.py
-- `make test` and `make docs` Makefile targets
-- `config.ld` for LDoc generation
-- `REPORT.md` code review report (23 findings, all resolved)
-
-### Fixed
-
-- C++ extension actions appeared in Actions list but did nothing when triggered — added `hookcommand2`/`toggleaction` registration error checking and diagnostic logging
-- C++ extension `run_script()` now logs the exact path tried when a Lua script is not found
-- ReaPack install path doubled (`Scripts/ReaTC/ReaTC/`) — category renamed from `ReaTC/` to `Timecode/`; C++ extension paths updated to match
-- JSFX LTC decoder: fixed bpm_period seed from full-cell to half-cell width — 25fps now locks immediately at any level
-- JSFX LTC encoder: added play-start transition reset and frame rebuild on rate change
-- Python daemons now validate TC ranges (0-23h, 0-59m, 0-59s, 0-29f) and log malformed input to stderr
-- Daemon write failure now retries 3 times with backoff before disabling output (was: immediate disable)
-- `os.execute` return values checked in Bake LTC from Regions (mkdir and generation)
-- LTC generator CLI amplitude clamped to valid int16 range (1–32767)
-- OSC address validated to start with `/` per OSC spec
-- Build scripts use explicit `encoding="utf-8"` for Windows compatibility
-
-### Changed
-
-- CI: merged `build-extension` job into `validate` in check.yml (saves one VM boot)
-- CI: lua syntax check now uses mise-installed lua instead of apt
-- CI: added pip cache for pytest, mise cache for release.yml, gem cache for reapack-index
-- CI: pandoc installed via `pandoc/actions/setup@v1` instead of apt

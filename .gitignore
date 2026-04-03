@@ -32,6 +32,9 @@ MANIFEST
 !build/
 !build/*.py
 
+# C++ extension build output
+src/extension/build/
+
 # ReaPack index (generated, published to reapack branch)
 index.xml
 

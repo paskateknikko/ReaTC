@@ -2,3 +2,5 @@
 python = "3.11"
 lua = "5.3"
 watchexec = "latest"
+pandoc = "latest"
+typst = "latest"

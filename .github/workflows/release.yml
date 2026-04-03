@@ -59,13 +59,16 @@ jobs:
 
       - uses: jdx/mise-action@v2
         with:
-          install_args: python
+          install_args: python pandoc typst
 
-      - name: Set version from tag
+      - name: Set version and ReaPack config
         id: version
         run: |
           VERSION="${{ github.ref_name }}"
           echo "version=${VERSION#v}" >> $GITHUB_OUTPUT
+          source build/reapack.env
+          echo "index_name=${REAPACK_INDEX_NAME}" >> $GITHUB_OUTPUT
+          echo "category=${REAPACK_CATEGORY}" >> $GITHUB_OUTPUT
 
       - name: Check CHANGELOG entry
         run: |
@@ -85,33 +88,26 @@ jobs:
       - name: Build package
         run: python3 build/build.py --version "${{ steps.version.outputs.version }}"
 
-      - name: Verify build artifacts
+      - name: Download extension binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: extension-binaries
+          merge-multiple: true
+
+      - name: Add extension binaries to dist
         run: |
-          REQUIRED_FILES=(
-            "dist/LICENSE"
-            "dist/README.md"
-            "dist/ABOUT.md"
-            "dist/Scripts/ReaTC/reatc.lua"
-            "dist/Scripts/ReaTC/reatc_core.lua"
-            "dist/Scripts/ReaTC/reatc_outputs.lua"
-            "dist/Scripts/ReaTC/reatc_ui.lua"
-            "dist/Scripts/ReaTC/reatc_regions_to_ltc.lua"
-            "dist/Scripts/ReaTC/reatc_artnet.py"
-            "dist/Scripts/ReaTC/reatc_osc.py"
-            "dist/Scripts/ReaTC/reatc_ltcgen.py"
-            "dist/Effects/ReaTC/reatc_tc.jsfx"
-          )
-          for file in "${REQUIRED_FILES[@]}"; do
-            if [ ! -f "$file" ]; then
-              echo "ERROR: Missing required file: $file"
-              exit 1
-            fi
-          done
-          echo "✓ All build artifacts verified"
+          DIST_DIR="dist/${{ steps.version.outputs.index_name }}-${{ steps.version.outputs.version }}"
+          mkdir -p "${DIST_DIR}/UserPlugins"
+          cp extension-binaries/reaper_reatc* "${DIST_DIR}/UserPlugins/"
+
+      - name: Verify build artifacts
+        run: python3 build/verify.py --version "${{ steps.version.outputs.version }}"
 
       - name: Generate release notes
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          NAME="${{ steps.version.outputs.index_name }}"
+          CATEGORY="${{ steps.version.outputs.category }}"
           REPO="${{ github.repository }}"
 
           # Extract changelog section for this version (pre-releases fall back to [unreleased])
@@ -139,15 +135,11 @@ jobs:
 
           ## Manual install
 
-          1. Download **ReaTC-${VERSION}.zip** below
+          1. Download **${NAME}-${VERSION}.zip** below
           2. Extract into your REAPER resource folder (Options → Show REAPER resource path…)
-             - \`Scripts/ReaTC/\` and \`Effects/ReaTC/\` should end up inside the resource folder
-          3. Load \`Scripts/ReaTC/ReaTC.lua\` via Actions → Load ReaScript
-
-          ## C++ Extension (optional)
-
-          Download the binary for your platform and copy to REAPER's \`UserPlugins/\` folder.
-          This registers human-readable action names (\`_REATC_MAIN\`, etc.) for OSC/controller mapping.
+             - The zip contains \`Scripts/\`, \`Effects/\`, and \`UserPlugins/\` folders that merge with your existing REAPER resource folder
+          3. Load \`Scripts/${NAME}/${CATEGORY}/reatc.lua\` via Actions → Load ReaScript
+          4. Restart REAPER to load the C++ extension from \`UserPlugins/\`
 
           ## Changes
 
@@ -159,15 +151,11 @@ jobs:
 
       - name: Create zip artifact
         run: |
-          cd dist
-          zip -r "../ReaTC-${{ steps.version.outputs.version }}.zip" .
-          ls -lh "../ReaTC-${{ steps.version.outputs.version }}.zip"
-
-      - name: Download extension binaries
-        uses: actions/download-artifact@v4
-        with:
-          path: extension-binaries
-          merge-multiple: true
+          NAME="${{ steps.version.outputs.index_name }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          cd "dist/${NAME}-${VERSION}"
+          zip -r "../../${NAME}-${VERSION}.zip" .
+          ls -lh "../../${NAME}-${VERSION}.zip"
 
       - name: Set up Ruby for reapack-index
         uses: ruby/setup-ruby@v1
@@ -181,15 +169,16 @@ jobs:
           key: gems-${{ runner.os }}-reapack-index
           restore-keys: gems-${{ runner.os }}-
 
-      - name: Set up pandoc
-        uses: pandoc/actions/setup@v1
-
       - name: Install reapack-index
         run: gem install reapack-index
 
       - name: Publish to reapack branch
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          NAME="${{ steps.version.outputs.index_name }}"
+          CATEGORY="${{ steps.version.outputs.category }}"
+          DIST_DIR="dist/${NAME}-${VERSION}"
+
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote set-url origin \
@@ -208,21 +197,19 @@ jobs:
           fi
 
           # Remove old package files so stale artifacts don't persist
-          # (also clean legacy dirs from older releases)
           rm -rf /tmp/reapack-pub/ReaTC /tmp/reapack-pub/Timecode /tmp/reapack-pub/Scripts /tmp/reapack-pub/Effects
 
-          # Copy built files into a flat category directory.
-          # ReaPack adds the Scripts/ or Effects/ prefix automatically based
-          # on package type, so the branch must NOT include those prefixes.
-          # Category is "Timecode" (not "ReaTC") to avoid path doubling with
-          # the index name — install path: Scripts/ReaTC/Timecode/reatc.lua
-          mkdir -p /tmp/reapack-pub/Timecode
-          cp dist/Scripts/ReaTC/* /tmp/reapack-pub/Timecode/
-          cp dist/Effects/ReaTC/* /tmp/reapack-pub/Timecode/
-          cp dist/ABOUT.md /tmp/reapack-pub/
+          # Copy built files into category directory.
+          # ReaPack adds the type prefix (Scripts/, Effects/) automatically,
+          # so the branch must NOT include those prefixes.
+          # Install path: <type>/<index_name>/<category>/<file>
+          mkdir -p "/tmp/reapack-pub/${CATEGORY}"
+          cp "${DIST_DIR}/Scripts/${NAME}/${CATEGORY}/"* "/tmp/reapack-pub/${CATEGORY}/"
+          cp "${DIST_DIR}/Effects/${NAME}/${CATEGORY}/"* "/tmp/reapack-pub/${CATEGORY}/"
+          cp "${DIST_DIR}/ABOUT.md" /tmp/reapack-pub/
 
           # Copy extension binaries alongside scripts (referenced by @provides)
-          cp extension-binaries/reaper_reatc* /tmp/reapack-pub/Timecode/
+          cp "${DIST_DIR}/UserPlugins/"reaper_reatc* "/tmp/reapack-pub/${CATEGORY}/"
 
           # Generate a reapack-branch-specific README
           cat > /tmp/reapack-pub/README.md << 'REAPACK_README'
@@ -248,16 +235,14 @@ jobs:
 
           # Let reapack-index update index.xml from git history and commit it
           cd /tmp/reapack-pub
-          reapack-index --name "ReaTC" --about ABOUT.md --commit
+          reapack-index --name "${NAME}" --about ABOUT.md --commit
 
           git push origin HEAD:reapack
 
       - name: Upload release with artifacts
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            ReaTC-${{ steps.version.outputs.version }}.zip
-            extension-binaries/*
+          files: ${{ steps.version.outputs.index_name }}-${{ steps.version.outputs.version }}.zip
           body_path: release_notes.md
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

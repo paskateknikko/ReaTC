@@ -30,19 +30,13 @@ https://github.com/paskateknikko/ReaTC/raw/reapack/index.xml
 
 ### Manual Installation
 
-1. Download the latest release from [GitHub Releases](https://github.com/paskateknikko/ReaTC/releases)
-2. Copy `Scripts/ReaTC/` to your REAPER Scripts directory:
-   - **Windows:** `%APPDATA%\REAPER\Scripts\`
-   - **macOS:** `~/Library/Application Support/REAPER/Scripts/`
-3. Copy `Effects/ReaTC/` to your REAPER Effects directory:
-   - **Windows:** `%APPDATA%\REAPER\Effects\`
-   - **macOS:** `~/Library/Application Support/REAPER/Effects/`
-4. *(Optional)* Copy the C++ extension binary to REAPER UserPlugins:
-   - **Windows:** `%APPDATA%\REAPER\UserPlugins\reaper_reatc64.dll`
-   - **macOS ARM:** `~/Library/Application Support/REAPER/UserPlugins/reaper_reatc-arm64.dylib`
-   - **macOS Intel:** `~/Library/Application Support/REAPER/UserPlugins/reaper_reatc-x86_64.dylib`
-   - Restart REAPER after adding the extension — native plugins are only loaded at startup.
-5. In REAPER: Actions > Show action list > Load ReaScript > select `reatc.lua`
+1. Download the latest **ReaTC-x.x.x.zip** from [GitHub Releases](https://github.com/paskateknikko/ReaTC/releases)
+2. Extract the zip contents into your REAPER resource folder:
+   - **Windows:** `%APPDATA%\REAPER\`
+   - **macOS:** `~/Library/Application Support/REAPER/`
+   - The zip contains `Scripts/`, `Effects/`, and `UserPlugins/` folders that merge with your existing REAPER resource folder
+3. **Restart REAPER** — the C++ extension is only loaded at startup
+4. In REAPER: Actions > Show action list > Load ReaScript > select `Scripts/ReaTC/Timecode/reatc.lua`
 
 
 ---
@@ -60,16 +54,24 @@ https://github.com/paskateknikko/ReaTC/raw/reapack/index.xml
 - **Art-Net TimeCode** — broadcasts SMPTE TC over UDP (port 6454); unicast or broadcast; configurable IP
 - **MIDI Timecode (MTC)** — sample-accurate quarter-frame generator via JSFX; no external MIDI library required
 - **OSC** — broadcasts SMPTE TC as raw OSC (`/tc ,iiiii H M S F type`) at ~30 fps; configurable destination IP, port, and address
-- **LTC audio generator** — encodes timecode to LTC audio with rise-time filtering per SMPTE 12M spec
+- **LTC audio generator** — encodes timecode to LTC audio with slew-rate shaping matching REAPER's native LTC waveform
+- **LTC User Bits** — configurable user bits format (Characters/Date-Timezone) with SMPTE/EBU BGF flag positioning
 - **Bake LTC from regions** — standalone tool generates offline LTC WAV files from project regions with per-region TC start, FPS, and output level
 
 ### General
 - **TC Offset** — user-configurable HH:MM:SS:FF offset applied before all outputs; supports drop-frame wrap-around
-- **Network sync status** — Art-Net and OSC indicators show packet counts and daemon health
+- **LTC Diagnostics** — dedicated analysis JSFX with waveform display, bit histogram, timing analysis, and auto-detected frame rate / BGF positioning
+- **Network sync status** — Art-Net and OSC toggleable directly from the main window
 - **All standard frame rates** — 24fps (Film), 25fps (EBU/PAL), 29.97fps Drop Frame, 30fps (SMPTE)
 - **Dark UI** — unified dark style across Lua script and JSFX; scalable TC display
 - **Cross-platform** — macOS (10.15+) and Windows (10+); Python 3 standard library only
 - **ReaPack compatible** — install via package manager; ReaImGui auto-installed as dependency
+
+## Use Cases
+
+- **Playback sync** — play a REAPER project and broadcast timecode to lighting consoles, video servers, or other devices via Art-Net, OSC, MTC, or LTC
+- **Timecode format conversion** — convert between any supported formats without playback (e.g. MTC→LTC, LTC→Art-Net, MTC→OSC); all outputs run whenever valid TC is present, independent of REAPER's transport state
+- **Offline LTC rendering** — bake LTC audio from project regions for pre-programmed shows or backup timecode tracks
 
 ## Usage
 
@@ -96,13 +98,17 @@ When collapsed, the plugin shows a compact timecode display:
 
 ![JSFX plugin — compact view](images/jsfx-compact.png)
 
-Click the gear icon to access JSFX settings (framerate, LTC threshold, output level):
+When resized wider, the plugin shows a compact timecode display:
+
+![JSFX plugin — wide compact view](images/jsfx-wide.png)
+
+Click the ⚙ icon to access JSFX settings (framerate, LTC threshold, output level, user bits, BGF mode):
 
 ![JSFX settings dialog](images/jsfx-settings.png)
 
 #### Step 2: Run the Lua script
 
-1. Actions menu > search "ReaTC" > run **Art-Net and MIDI Timecode sender for REAPER**
+1. Click the **"Open ReaTC Script"** button in the JSFX Network output section, **or** Actions menu > search "ReaTC" > run **Art-Net and MIDI Timecode sender for REAPER**
 2. The script window shows the active timecode and output status
 3. Click **Settings** to configure Art-Net and OSC destinations
 
@@ -132,7 +138,7 @@ In the JSFX plugin UI, enable the outputs you need:
 
 1. Run the ReaTC script and open **Settings**
 2. Set the **destination IP** (e.g., `2.0.0.1` for Art-Net unicast, or `2.255.255.255` for broadcast)
-3. Enable **Art-Net Output** — packets send during playback
+3. Enable **Art-Net Output** — packets send whenever valid TC is present
 
 ### OSC Timecode Output
 
@@ -148,6 +154,16 @@ In the JSFX plugin UI, enable the outputs you need:
 4. Rendered WAV items are placed on a `LTC [rendered]` track
 
 ![Bake LTC from Regions — per-region TC start and framerate](images/regions-to-ltc.png)
+
+### LTC User Bits
+
+In the JSFX settings, set **User Bits** format (Characters or Date/Timezone) and enter 4 byte values (0–255). These are embedded in the LTC stream per SMPTE 12M. At 25fps, you can choose between SMPTE (REAPER-compatible) and EBU standard BGF bit positions.
+
+### LTC Diagnostics
+
+Add the **ReaTC LTC Diagnostics** JSFX to the same track (or any track receiving LTC audio) to inspect the signal in detail. Auto-detects frame rate, BGF positioning, and decodes user bits.
+
+![LTC Diagnostics — signal analysis with bit histogram and waveform](images/diagnostics.png)
 
 
 ## Troubleshooting

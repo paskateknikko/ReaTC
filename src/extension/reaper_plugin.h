@@ -42,4 +42,8 @@ typedef struct
 // Forward-declare — we only receive a pointer in hookcommand2, never dereference
 struct KbdSectionInfo;
 
+// Opaque types used by TrackFX_* and track enumeration API
+typedef void MediaTrack;
+typedef void ReaProject;
+
 #endif // _REAPER_PLUGIN_H_
