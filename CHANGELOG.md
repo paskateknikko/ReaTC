@@ -18,14 +18,16 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 ### Added
 
 - **Open Script button in JSFX** — launch the Lua script directly from the JSFX GUI when it's not running
-- **LTC User Bits** — set user bits format and value in the JSFX settings; supports Characters and Date/Timezone modes per SMPTE 12M
-- **LTC Diagnostics JSFX** — new analysis plugin with responsive UI, waveform display, timing histogram, and decoder statistics
+- **LTC User Bits** — set user bits format (None/Characters/Date-Timezone) and 4-byte value in the JSFX settings; numeric input with Tab/Shift-Tab navigation; defaults to Characters mode matching REAPER
+- **BGF Position Mode** — choose SMPTE (REAPER-compatible) or EBU standard bit positions at 25fps
+- **LTC Diagnostics JSFX** — new analysis plugin with responsive UI, waveform display, frame bit histogram, timing histogram, decoder statistics, auto-detected frame rate, and auto-detected BGF positioning (SMPTE/EBU)
 - **Clickable output toggles** — Art-Net and OSC can now be toggled directly from the main window
 - **`make install`** — one-command build and install to your REAPER resource folder
 
 ### Changed
 
 - **All timecode outputs always active** — LTC and MTC run whenever valid TC is present, even when stopped; enables live format conversion (e.g. MTC→LTC)
+- **LTC waveform** — slew-rate limiter replaces low-pass filter; produces clean trapezoidal wave matching REAPER's LTC generator (flat tops, no droop)
 - **Unified install paths** — manual install now matches the ReaPack layout; one zip, extract and go
 - **Cleaner main window** — less whitespace, TC scales to fit window, version shown inline
 - **Settings closes on ESC**
@@ -33,9 +35,10 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 
 ### Fixed
 
-- **Source display stuck on "No active source"** — JSFX variable silently overwritten due to EEL2 local pool overflow
+- **Source display stuck on "No active source"** — JSFX gmem variables silently overwritten due to EEL2 local variable pool overflow; all gmem indices and frame builder now use hardcoded values
 - **Open Script button** — now works from any JSFX instance, not just the first one
-- **LTC output level** — encoder filter no longer inflates the peak above configured dBFS
+- **LTC output level** — peak level now matches configured dBFS exactly
+- **BGF flags at 25fps** — correct bit positions for both SMPTE and EBU conventions; parity no longer bleeds into BGF1
 
 ### CI / DEV
 
