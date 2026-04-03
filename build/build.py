@@ -15,7 +15,21 @@ from pathlib import Path
 BUILD_DIR = Path(__file__).parent
 REPO_ROOT = BUILD_DIR.parent
 SRC_DIR = REPO_ROOT / "src"
-DIST_DIR = REPO_ROOT / "dist"
+DIST_BASE = REPO_ROOT / "dist"
+REAPACK_ENV = BUILD_DIR / "reapack.env"
+
+
+def parse_env(path):
+    """Parse a KEY=VALUE env file into a dict."""
+    config = {}
+    if path.exists():
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                key, _, value = line.partition("=")
+                if value:
+                    config[key.strip()] = value.strip()
+    return config
 
 
 def substitute_version(content, version):
@@ -58,15 +72,23 @@ def build(version="DEV"):
         if not SRC_DIR.exists():
             raise FileNotFoundError(f"src/ directory not found at {SRC_DIR}")
 
-        # Clean dist directory
-        if DIST_DIR.exists():
-            shutil.rmtree(DIST_DIR)
-            print("  ✓ Cleaned previous dist/")
-        DIST_DIR.mkdir(parents=True, exist_ok=True)
+        # Read ReaPack config for install paths
+        reapack = parse_env(REAPACK_ENV)
+        index_name = reapack.get("REAPACK_INDEX_NAME", "ReaTC")
+        category = reapack.get("REAPACK_CATEGORY", "Timecode")
 
-        # Create Scripts/ReaTC and Effects/ReaTC subdirectories in dist
-        dist_scripts_dir = DIST_DIR / "Scripts" / "ReaTC"
-        dist_effects_dir = DIST_DIR / "Effects" / "ReaTC"
+        # Output goes to dist/ReaTC-{version}/ mirroring REAPER resource structure
+        # Install path: <type>/<index_name>/<category>/<file>
+        dist_dir = DIST_BASE / f"{index_name}-{version}"
+
+        # Clean dist directory
+        if DIST_BASE.exists():
+            shutil.rmtree(DIST_BASE)
+            print("  ✓ Cleaned previous dist/")
+
+        # Create REAPER resource folder structure
+        dist_scripts_dir = dist_dir / "Scripts" / index_name / category
+        dist_effects_dir = dist_dir / "Effects" / index_name / category
         dist_scripts_dir.mkdir(parents=True, exist_ok=True)
         dist_effects_dir.mkdir(parents=True, exist_ok=True)
 
@@ -79,7 +101,7 @@ def build(version="DEV"):
         ]
 
         files_processed = 0
-        for src_dir, dist_dir in src_dirs:
+        for src_dir, dest_dir in src_dirs:
             if not src_dir.exists():
                 continue
             for filepath in sorted(src_dir.iterdir()):
@@ -93,7 +115,7 @@ def build(version="DEV"):
                     else:
                         changelog_commented = "\n-- ".join(changelog.split("\n"))
                     content = content.replace("{{CHANGELOG}}", changelog_commented)
-                    dist_file = dist_dir / filepath.name
+                    dist_file = dest_dir / filepath.name
                     with open(dist_file, "w", encoding="utf-8") as f:
                         f.write(content)
                     print(f"  ✓ {filepath.name}")
@@ -102,16 +124,16 @@ def build(version="DEV"):
         if files_processed == 0:
             raise ValueError("No source files found in src/")
 
-        # Copy LICENSE, README.md, ABOUT.md to dist root
+        # Copy LICENSE, README.md, ABOUT.md to dist dir root
         for filename in ["LICENSE", "README.md", "ABOUT.md"]:
             src = REPO_ROOT / filename
-            dst = DIST_DIR / filename
+            dst = dist_dir / filename
             if src.exists():
                 shutil.copy2(src, dst)
                 print(f"  ✓ {filename}")
 
         print()
-        print(f"✓ Build complete: {DIST_DIR}")
+        print(f"✓ Build complete: {dist_dir}")
         return 0
 
     except Exception as e:

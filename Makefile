@@ -1,9 +1,12 @@
-.PHONY: build clean verify all help watch extension docs test
+.PHONY: build clean verify all help watch extension docs test install
 
 VERSION ?= DEV
 ifdef v
 VERSION := $(v)
 endif
+
+# Read ReaPack config (index name and category)
+include build/reapack.env
 
 help:
 	@echo "ReaTC Build Commands"
@@ -17,6 +20,7 @@ help:
 	@echo "  make test                - Run Python unit tests"
 	@echo "  make docs                - Generate Lua API docs (requires ldoc)"
 	@echo "  make watch               - Rebuild on changes (requires watchexec)"
+	@echo "  make install             - Build and copy to REAPER resource folder (macOS)"
 	@echo "  make clean               - Remove dist/ and extension build"
 	@echo ""
 
@@ -26,12 +30,30 @@ build:
 verify:
 	python3 build/verify.py --version "$(VERSION)"
 
-all: build verify extension
-
 extension:
-	cmake -S src/extension -B dist/extension-build
-	cmake --build dist/extension-build
-	@echo "✓ Built extension"
+	cmake -S src/extension -B src/extension/build -DCMAKE_BUILD_TYPE=Release
+	cmake --build src/extension/build --config Release
+	@echo "✓ Built extension: src/extension/build/"
+
+DIST_DIR = dist/$(REAPACK_INDEX_NAME)-$(VERSION)
+
+all: build verify extension
+	mkdir -p "$(DIST_DIR)/UserPlugins"
+	cp src/extension/build/reaper_reatc.dylib "$(DIST_DIR)/UserPlugins/"
+	@echo "✓ Complete: $(DIST_DIR)/"
+
+ifeq ($(OS),Windows_NT)
+REAPER_RESOURCE ?= $(APPDATA)/REAPER
+else
+REAPER_RESOURCE ?= $(HOME)/Library/Application Support/REAPER
+endif
+
+install: all
+	cp -R "$(DIST_DIR)/Scripts/" "$(REAPER_RESOURCE)/Scripts/"
+	cp -R "$(DIST_DIR)/Effects/" "$(REAPER_RESOURCE)/Effects/"
+	cp -R "$(DIST_DIR)/UserPlugins/" "$(REAPER_RESOURCE)/UserPlugins/"
+	@echo "✓ Installed to $(REAPER_RESOURCE)"
+	@echo "  Restart REAPER to load the extension"
 
 test:
 	python3 -m pytest tests/ -v
@@ -40,7 +62,7 @@ docs:
 	ldoc .
 
 clean:
-	rm -rf dist/ dist/extension-build/
+	rm -rf dist/ src/extension/build/
 	@echo "✓ Cleaned dist/ and extension build"
 
 watch:
