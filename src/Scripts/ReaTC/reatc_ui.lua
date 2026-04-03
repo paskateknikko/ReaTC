@@ -38,6 +38,8 @@ return function(core, outputs)
   end
 
   local function push_style()
+    ImGui.PushStyleVar(ctx, ImGui.StyleVar_WindowPadding, 12, 6)
+    ImGui.PushStyleVar(ctx, ImGui.StyleVar_ItemSpacing,    8, 2)
     ImGui.PushStyleColor(ctx, ImGui.Col_WindowBg,        0x0F0F17FF)
     ImGui.PushStyleColor(ctx, ImGui.Col_TitleBg,         0x1A1C25FF)
     ImGui.PushStyleColor(ctx, ImGui.Col_TitleBgActive,   0x1A1C25FF)
@@ -65,6 +67,18 @@ return function(core, outputs)
 
   -- ── Main view ──────────────────────────────────────────────────────────────
 
+  local function output_toggle(id, enabled, error_state)
+    local color = error_state and C.red or enabled and C.green or C.dim
+    ImGui.TextColored(ctx, color, "\u{25CF}")
+    ImGui.SameLine(ctx, 0, 4)
+    ImGui.PushStyleColor(ctx, ImGui.Col_Button, 0x00000000)
+    ImGui.PushStyleColor(ctx, ImGui.Col_ButtonHovered, 0x3A3D5280)
+    ImGui.PushStyleColor(ctx, ImGui.Col_ButtonActive, 0x33384980)
+    local clicked = ImGui.Button(ctx, id)
+    ImGui.PopStyleColor(ctx, 3)
+    return clicked
+  end
+
   local function draw_main()
     local h, m, sec, f, source = core.get_active_tc()
 
@@ -77,11 +91,12 @@ return function(core, outputs)
     else
       tc_color = C.dim
     end
-    -- Dimmed variant for frames field
     local ff_color = (tc_color & 0xFFFFFF00) | 0xAA
 
-    -- Large TC display
-    ImGui.PushFont(ctx, font_tc, TC_FONT_SIZE * ui_scale)
+    -- Large TC display — scale font to fit window, rounded to avoid atlas rebuilds
+    local avail_w = ImGui.GetContentRegionAvail(ctx)
+    local tc_size = math.floor(math.max(24, math.min(TC_FONT_SIZE * ui_scale, avail_w / 7.2)))
+    ImGui.PushFont(ctx, font_tc, tc_size)
     local hms_str = string.format("%02d:%02d:%02d", h, m, sec)
     local ff_str  = string.format(":%02d", f)
     ImGui.TextColored(ctx, tc_color, hms_str)
@@ -106,6 +121,7 @@ return function(core, outputs)
     end
     ImGui.TextColored(ctx, sl_color, sl)
 
+
     -- Offset indicator
     if (s.tc_offset_h + s.tc_offset_m + s.tc_offset_s + s.tc_offset_f) > 0 then
       local sign = s.tc_offset_negative and "-" or "+"
@@ -120,39 +136,37 @@ return function(core, outputs)
         "JSFX not detected \u{2014} add ReaTC Timecode Converter to any track")
     end
 
-    -- Output status indicators
-    ImGui.Spacing(ctx)
-    local an_color  = s.artnet_error and C.red or s.artnet_enabled and C.green or C.dim
-    local osc_color = s.osc_error    and C.red or s.osc_enabled    and C.green or C.dim
-    ImGui.TextColored(ctx, an_color, "\u{25CF}")
-    ImGui.SameLine(ctx, 0, 4)
-    local an_label = "Art-Net"
-    if s.artnet_enabled and s.packets_sent > 0 then
-      an_label = string.format("Art-Net (%d)", s.packets_sent)
+    -- Output toggle buttons
+    if output_toggle('Art-Net', s.artnet_enabled, s.artnet_error) then
+      s.artnet_enabled = not s.artnet_enabled
+      if s.artnet_enabled then s.packets_sent = 0 else outputs.stop_artnet_daemon() end
+      core.save_settings()
     end
-    ImGui.TextColored(ctx, C.text, an_label)
     ImGui.SameLine(ctx, 0, 16)
-    ImGui.TextColored(ctx, osc_color, "\u{25CF}")
-    ImGui.SameLine(ctx, 0, 4)
-    local osc_label = "OSC"
-    if s.osc_enabled and s.osc_packets_sent > 0 then
-      osc_label = string.format("OSC (%d)", s.osc_packets_sent)
+    if output_toggle('OSC', s.osc_enabled, s.osc_error) then
+      s.osc_enabled = not s.osc_enabled
+      if s.osc_enabled then s.osc_packets_sent = 0 else outputs.stop_osc_daemon() end
+      core.save_settings()
     end
-    ImGui.TextColored(ctx, C.text, osc_label)
 
-    ImGui.Spacing(ctx)
     if ImGui.Button(ctx, 'Settings') then
       ImGui.OpenPopup(ctx, 'Settings##popup')
     end
-    ImGui.Spacing(ctx)
+    ImGui.SameLine(ctx, 0, 8)
     ImGui.TextColored(ctx, C.dim, "v" .. core.VERSION)
   end
 
   -- ── Settings content (rendered inside popup modal) ──────────────────────────
 
   local function draw_settings()
+    -- Close on ESC
+    if ImGui.IsKeyPressed(ctx, ImGui.Key_Escape) then
+      ImGui.CloseCurrentPopup(ctx)
+    end
+
     -- ── Art-Net ──────────────────────────────────────────────────────────────
     ImGui.SeparatorText(ctx, 'Art-Net Output')
+    ImGui.TextColored(ctx, C.dim, "Art-Net timecode broadcast (lighting consoles, media servers)")
 
     local an_changed, an_val = ImGui.Checkbox(ctx, 'Enable##artnet', s.artnet_enabled)
     if an_changed then
@@ -180,7 +194,7 @@ return function(core, outputs)
       ImGui.TextColored(ctx, C.red, "Error: " .. trunc(s.artnet_error, 60))
     elseif s.artnet_enabled and s.artnet_proc then
       ImGui.TextColored(ctx, C.green,
-        string.format("Running — %d packets sent", s.packets_sent))
+        string.format("Running \u{2014} %d packets sent", s.packets_sent))
     elseif s.artnet_enabled and not s.tc_valid then
       ImGui.TextColored(ctx, C.orange, "Waiting for valid TC")
     elseif s.python_bin then
@@ -191,6 +205,7 @@ return function(core, outputs)
 
     -- ── OSC ──────────────────────────────────────────────────────────────────
     ImGui.SeparatorText(ctx, 'OSC Output')
+    ImGui.TextColored(ctx, C.dim, "Open Sound Control output (QLab, MA3, EOS, etc.)")
 
     local osc_changed, osc_val = ImGui.Checkbox(ctx, 'Enable##osc', s.osc_enabled)
     if osc_changed then
@@ -213,11 +228,16 @@ return function(core, outputs)
     end
 
     ImGui.SetNextItemWidth(ctx, 80)
-    local osc_port_changed, new_osc_port = ImGui.InputInt(ctx, 'Port##osc', s.osc_port)
+    local osc_port_str = tostring(s.osc_port)
+    local osc_port_changed, new_osc_port_str = ImGui.InputText(ctx, 'Port##osc', osc_port_str,
+      ImGui.InputTextFlags_CharsDecimal)
     if osc_port_changed then
-      s.osc_port = math.max(1, math.min(65535, new_osc_port))
-      core.save_settings()
-      if s.osc_enabled then outputs.stop_osc_daemon() end
+      local p = tonumber(new_osc_port_str)
+      if p and p >= 1 and p <= 65535 then
+        s.osc_port = math.floor(p)
+        core.save_settings()
+        if s.osc_enabled then outputs.stop_osc_daemon() end
+      end
     end
 
     ImGui.SetNextItemWidth(ctx, 180)
@@ -236,15 +256,13 @@ return function(core, outputs)
       ImGui.TextColored(ctx, C.red, "Error: " .. trunc(s.osc_error, 60))
     elseif s.osc_enabled and s.osc_proc then
       ImGui.TextColored(ctx, C.green,
-        string.format("Running — %d packets to %s:%d  %s",
+        string.format("Running \u{2014} %d packets to %s:%d  %s",
           s.osc_packets_sent, s.osc_ip, s.osc_port, s.osc_address))
     elseif s.osc_enabled and not s.tc_valid then
       ImGui.TextColored(ctx, C.orange, "Waiting for valid TC")
     elseif s.osc_enabled then
       ImGui.TextColored(ctx, C.dim,
         string.format("Sending to %s:%d  %s", s.osc_ip, s.osc_port, s.osc_address))
-    else
-      ImGui.TextColored(ctx, C.dim, "Open Sound Control output (QLab, MA3, EOS, etc.)")
     end
 
     -- ── Timecode ─────────────────────────────────────────────────────────────
@@ -316,16 +334,18 @@ return function(core, outputs)
   -- Returns false when the window is closed (stops the defer loop).
   function M.draw_ui()
     push_style()
-    ImGui.SetNextWindowSizeConstraints(ctx, 360, 120, 1e9, 1e9)
+    ImGui.SetNextWindowSizeConstraints(ctx, 300, 180, 1e9, 1e9)
     local visible, open = ImGui.Begin(ctx, 'ReaTC v' .. core.VERSION, true)
     if visible then
       local win_w = ImGui.GetWindowWidth(ctx)
       ui_scale = math.max(0.6, math.min(2.0, win_w / 480))
-      ImGui.PushFont(ctx, nil, DEFAULT_FONT_SIZE * ui_scale)
+      local font_size = math.floor(DEFAULT_FONT_SIZE * ui_scale)
+      ImGui.PushFont(ctx, nil, font_size)
       local success, err = pcall(function()
         draw_main()
 
-        -- Settings popup modal (floats over main view)
+        -- Settings popup modal (fixed size, centered)
+        ImGui.SetNextWindowSizeConstraints(ctx, 420, 300, 600, 1200)
         local modal_visible, modal_open = ImGui.BeginPopupModal(ctx, 'Settings##popup', true)
         if modal_visible then
           if not modal_open then
@@ -342,6 +362,7 @@ return function(core, outputs)
     end
     ImGui.End(ctx)
     ImGui.PopStyleColor(ctx, 18)
+    ImGui.PopStyleVar(ctx, 2)
     return open
   end
 
