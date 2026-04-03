@@ -12,7 +12,7 @@
 #   <hours> <mins> <secs> <frames> <tc_type>
 #
 # Field ranges:
-#   hours   : 0-23
+#   hours   : 0-39
 #   mins    : 0-59
 #   secs    : 0-59
 #   frames  : 0-29
@@ -54,7 +54,7 @@ def build_osc_timecode(address: str, hours: int, mins: int, secs: int, frames: i
     """Build a raw OSC message with 5 int32 arguments.
 
     @param address: OSC address pattern (e.g. "/reatc/tc").
-    @param hours: Hours component (0-23).
+    @param hours: Hours component (0-39).
     @param mins: Minutes component (0-59).
     @param secs: Seconds component (0-59).
     @param frames: Frame number (0-29).
@@ -100,7 +100,7 @@ def main() -> None:
                 frames  = int(parts[3])
                 tc_type = int(parts[4])
 
-                if not (0 <= hours <= 23 and 0 <= mins <= 59
+                if not (0 <= hours <= 39 and 0 <= mins <= 59
                         and 0 <= secs <= 59 and 0 <= frames <= 29
                         and 0 <= tc_type <= 3):
                     print(f"osc: TC out of range: {line!r}", file=sys.stderr)

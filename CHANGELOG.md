@@ -12,6 +12,16 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 
 # ReaTC Changelog
 
+## [1.2.1] - 2026-04-04
+
+### Changed
+
+- **Local build naming** — `make all` / `make install` now names the extension binary with architecture suffix matching CI artifacts (e.g. `reaper_reatc-arm64.dylib`)
+
+### Fixed
+
+- **LTC extended hours** — accept LTC timecode with hours 0-39 (full BCD range); REAPER and some systems output hours >= 24 which were previously rejected
+- **Duplicate extension loading** — C++ extension no longer fatally exits when action IDs are already registered (e.g. local + ReaPack install coexisting); logs a warning instead
 
 ## [1.2.0] - 2026-04-04
 

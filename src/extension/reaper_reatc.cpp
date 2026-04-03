@@ -321,13 +321,20 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
 
   plugin_register = rec->Register;
 
-  // Register custom actions
+  // Register custom actions (non-fatal on failure — a second copy of the
+  // extension may already own these IDs, e.g. local + ReaPack install)
+  int registered = 0;
   for (int i = 0; i < ACT_COUNT; ++i) {
     g_cmd_ids[i] = rec->Register("custom_action", &g_actions[i]);
     if (g_cmd_ids[i] == 0) {
-      log_msg("ReaTC: failed to register custom action\n");
-      return 0;
+      log_msg("ReaTC: skipping already-registered action (duplicate extension?)\n");
+    } else {
+      ++registered;
     }
+  }
+  if (registered == 0) {
+    log_msg("ReaTC: no actions registered — another copy of the extension is loaded\n");
+    return 0;
   }
 
   // Register callbacks
