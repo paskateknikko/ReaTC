@@ -73,11 +73,11 @@ def generate_readme_pdf(dist_dir):
     if not readme.exists() or not images_dir.exists():
         return False
 
-    # Strip badge and Buy Me A Coffee lines for PDF
+    # Strip badges and Buy Me A Coffee lines for PDF
     content = readme.read_text(encoding="utf-8")
     lines = [
         line for line in content.splitlines()
-        if not re.search(r"shields\.io|buymeacoffee", line)
+        if not re.search(r"shields\.io|buymeacoffee|badge\.svg", line)
     ]
     clean_md = dist_dir / "readme_clean.md"
     clean_md.write_text("\n".join(lines), encoding="utf-8")
@@ -86,7 +86,7 @@ def generate_readme_pdf(dist_dir):
         subprocess.run(
             [
                 "pandoc", str(clean_md),
-                "--pdf-engine=weasyprint",
+                "--pdf-engine=typst",
                 f"--resource-path={dist_dir}",
                 "-o", str(dist_dir / "README.pdf"),
             ],
@@ -97,7 +97,7 @@ def generate_readme_pdf(dist_dir):
         return True
     except FileNotFoundError:
         print("  ⚠ pandoc not found — skipping PDF generation")
-        print("    Install: brew install pandoc && pip install weasyprint")
+        print("    Install via mise: mise install pandoc typst")
         return False
     except subprocess.CalledProcessError as e:
         print(f"  ⚠ PDF generation failed — skipping")
