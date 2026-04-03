@@ -1,0 +1,963 @@
+desc:ReaTC LTC Diagnostics
+author:ReaTC
+version:1.2.0
+about:
+  LTC audio diagnostics — displays decoded timecode, signal level, bit timing,
+  frame rate detection, lock status, and raw bit stream visualization.
+
+slider1:-24<-60,-6,1>-Threshold dB
+slider2:3<0,3,1{24,25,29.97DF,30}>-Expected Frame Rate
+
+// Read-only display sliders
+slider10:0<0,23,1>-Hours
+slider11:0<0,59,1>-Minutes
+slider12:0<0,59,1>-Seconds
+slider13:0<0,29,1>-Frames
+slider14:0<-100,0,0.1>-Signal Level dBFS
+slider15:0<0,1,1{Unlocked,Locked}>-Lock Status
+slider16:-1<-1,3,1{Unknown,24fps,25fps,29.97DF,30fps}>-Detected Rate
+
+
+@init
+
+// ── Local memory layout ──
+BIT_BUF  = 0;    // Ring buffer: 512 cells (0..511)
+HIST_BUF = 512;  // Bit timing histogram: 256 cells (512..767)
+WAVE_BUF = 768;  // Waveform ring buffer: 512 cells (768..1279)
+FRAME_HIST = 1280; // Bit position histogram: 80 cells — count of 1s per position
+FRAME_COUNT = 1360; // Single cell: total frames counted
+
+// ── Decoder state ──
+sig_state = 0;
+bpm_state = 0;
+stt       = 0;
+bit_idx   = 0;
+bpm_period = 0;
+peak_level = 0;
+
+// Decoded TC
+ltc_h = 0; ltc_m = 0; ltc_s = 0; ltc_f = 0;
+ltc_locked = 0;
+ltc_valid_samples = 0;
+ltc_dec_seq = 0;
+
+// Rate detection
+det_max_f = 0;
+det_df_seen = 0;
+det_window = 0;
+det_rate = -1;
+det_frames = 0;
+
+// Bit statistics
+total_bits = 0;
+total_syncs = 0;
+sync_errors = 0;
+bits_since_sync = 0;
+last_sync_bits = 0;
+
+// Timing analysis
+min_half_cell = 99999;
+max_half_cell = 0;
+avg_half_cell = 0;
+timing_samples = 0;
+
+// Waveform capture
+wave_idx = 0;
+wave_len = 512;
+
+// Frame bit histogram
+i = 0; loop(80, mem[FRAME_HIST + i] = 0; i += 1;);
+mem[FRAME_COUNT] = 0;
+
+// GFX state
+last_mouse_cap = 0;
+
+function update_params() (
+  fps_type = floor(slider2);
+  fps_int  = fps_type == 0 ? 24 : fps_type == 1 ? 25 : 30;
+  fps_real = fps_type == 0 ? 24 : fps_type == 1 ? 25 : fps_type == 2 ? 29.97 : 30;
+  thr  = 10 ^ (slider1 / 20.0);
+  spb  = srate / (fps_int * 80.0);
+  bpm_period = spb * 0.5;
+  mid  = bpm_period * 1.5;
+  minb = bpm_period * 0.5;
+  maxb = bpm_period * 3.0;
+);
+
+
+// ── Decoder helpers ──
+
+function extract_bits(start, off, cnt) local(r, i) (
+  r = 0; i = 0;
+  loop(cnt,
+    r |= mem[BIT_BUF + ((start + off + i) & 511)] << i;
+    i += 1;
+  );
+  r
+);
+
+function check_sync() local(wl, i, bv, fs,
+                             f_u,f_t,s_u,s_t,m_u,m_t,h_u,h_t,
+                             fr, sr, mr, hr, df_bit, bgf0, bgf1, bgf2) (
+  wl = 0; i = 0;
+  loop(16,
+    bv  = mem[BIT_BUF + ((bit_idx - 16 + i) & 511)];
+    wl |= bv << i;
+    i  += 1;
+  );
+  (wl == 0x3FFD || wl == 0xBFFC) ? (
+    total_syncs += 1;
+    last_sync_bits = bits_since_sync;
+    bits_since_sync = 0;
+
+    fs  = bit_idx - 80;
+    f_u = extract_bits(fs,  0, 4); f_t = extract_bits(fs,  8, 2);
+    s_u = extract_bits(fs, 16, 4); s_t = extract_bits(fs, 24, 3);
+    m_u = extract_bits(fs, 32, 4); m_t = extract_bits(fs, 40, 3);
+    h_u = extract_bits(fs, 48, 4); h_t = extract_bits(fs, 56, 2);
+    df_bit = extract_bits(fs, 10, 1);
+
+    // Binary group flags — auto-detect SMPTE vs EBU positioning
+    // At 25fps, check both bit 43 (SMPTE) and bit 27 (EBU) for BGF0
+    bgf0_smpte = extract_bits(fs, 43, 1);
+    bgf0_ebu   = extract_bits(fs, 27, 1);
+    (det_rate == 1 || (det_rate < 0 && fps_type == 1)) ? (
+      // 25fps: use EBU positions if bit 27 has BGF0, else SMPTE
+      bgf0_ebu && !bgf0_smpte ? (
+        bgf0 = bgf0_ebu;
+        bgf1 = extract_bits(fs, 58, 1);
+        bgf2 = extract_bits(fs, 43, 1);
+        bgf_mode_det = 1;  // EBU
+      ) : (
+        bgf0 = bgf0_smpte;
+        bgf1 = extract_bits(fs, 58, 1);
+        bgf2 = 0;
+        bgf_mode_det = 0;  // SMPTE
+      );
+    ) : (
+      bgf0 = bgf0_smpte;
+      bgf_mode_det = 0;  // SMPTE
+      bgf1 = extract_bits(fs, 59, 1);
+      bgf2 = extract_bits(fs, 58, 1);
+    );
+
+    // User bits (binary groups 1-8, 4 bits each)
+    ub1 = extract_bits(fs,  4, 4);
+    ub2 = extract_bits(fs, 12, 4);
+    ub3 = extract_bits(fs, 20, 4);
+    ub4 = extract_bits(fs, 28, 4);
+    ub5 = extract_bits(fs, 36, 4);
+    ub6 = extract_bits(fs, 44, 4);
+    ub7 = extract_bits(fs, 52, 4);
+    ub8 = extract_bits(fs, 60, 4);
+
+    fr = f_t*10 + f_u; sr = s_t*10 + s_u;
+    mr = m_t*10 + m_u; hr = h_t*10 + h_u;
+
+    // Rate detection accumulator
+    fr < 30 && sr < 60 && mr < 60 && hr < 24 ? (
+      fr > det_max_f ? (det_max_f = fr);
+      det_df_seen = det_df_seen | df_bit;
+      det_frames += 1;
+    );
+
+    fr < 30 && sr < 60 && mr < 60 && hr < 24 ? (
+      ltc_h = hr; ltc_m = mr; ltc_s = sr; ltc_f = fr;
+      ltc_df_bit = df_bit;
+      ltc_bgf0 = bgf0; ltc_bgf1 = bgf1; ltc_bgf2 = bgf2;
+      ltc_locked = 1;
+      ltc_dec_seq = (ltc_dec_seq + 1) & 65535;
+      ltc_valid_samples = floor(srate * 0.15);
+      // Accumulate bit histogram for all 80 positions
+      fh_i = 0;
+      loop(80,
+        mem[FRAME_HIST + fh_i] += mem[BIT_BUF + ((fs + fh_i) & 511)];
+        fh_i += 1;
+      );
+      mem[FRAME_COUNT] += 1;
+    ) : (
+      sync_errors += 1;
+    );
+  );
+);
+
+function push_bit(b) (
+  mem[BIT_BUF + (bit_idx & 511)] = b;
+  bit_idx += 1;
+  total_bits += 1;
+  bits_since_sync += 1;
+  bit_idx >= 80 ? check_sync();
+);
+
+
+update_params();
+
+
+@slider
+
+update_params();
+
+
+@block
+
+// Detect sample rate changes
+srate != cached_srate ? (
+  cached_srate = srate;
+  update_params();
+);
+
+// LTC lock expiry
+ltc_valid_samples > 0 ? (
+  ltc_valid_samples -= samplesblock;
+  ltc_valid_samples <= 0 ? (ltc_valid_samples = 0; ltc_locked = 0;);
+);
+
+// Rate detection (2-second window)
+ltc_locked ? (
+  det_window <= 0 ? (det_window = floor(srate * 2.0));
+  det_window -= samplesblock;
+  det_window <= 0 ? (
+    det_frames >= 10 ? (
+      det_df_seen ? (
+        det_rate = 2;
+      ) : det_max_f >= 25 ? (
+        det_rate = 3;
+      ) : det_max_f >= 24 ? (
+        det_rate = 1;
+      ) : (
+        det_rate = 0;
+      );
+    );
+    // Auto-switch expected rate to match detected
+    det_rate >= 0 && det_rate != fps_type ? (
+      slider2 = det_rate;
+      update_params();
+    );
+    det_max_f = 0;
+    det_df_seen = 0;
+    det_frames = 0;
+    det_window = floor(srate * 2.0);
+  );
+) : (
+  det_window = 0;
+);
+
+// Update display sliders
+slider10 = ltc_h; slider11 = ltc_m; slider12 = ltc_s; slider13 = ltc_f;
+ltc_locked ? (
+  slider14 = peak_level > 0.000001 ? 20 * log10(peak_level) : -100;
+) : (
+  slider14 = -100;
+);
+slider15 = ltc_locked;
+slider16 = det_rate;
+sliderchange(0x1FC00); // sliders 10-16
+
+// Peak decay (~10 dB/s)
+meter_decay = exp(log(0.316) * samplesblock / srate);
+peak_level *= meter_decay;
+
+
+@sample
+
+// Waveform capture
+mem[WAVE_BUF + wave_idx] = spl0;
+wave_idx = (wave_idx + 1) % wave_len;
+
+// Find strongest signal across input channels
+best_s = 0;
+best_abs = 0;
+ch = 0;
+loop(num_ch,
+  cs = spl(ch);
+  acs = abs(cs);
+  acs > best_abs ? (best_s = cs; best_abs = acs;);
+  ch += 1;
+);
+s = best_s;
+abs_s = best_abs;
+abs_s > peak_level ? (peak_level = abs_s);
+
+// Biphase-mark decoder
+ns = s > thr ? 1 : s < -thr ? -1 : 0;
+ns != 0 && ns != sig_state ? (
+  sig_state = ns;
+  gap = stt; stt = 0;
+
+  // Timing statistics
+  gap > 0 ? (
+    gap < min_half_cell ? min_half_cell = gap;
+    gap > max_half_cell ? max_half_cell = gap;
+    timing_samples += 1;
+    avg_half_cell = avg_half_cell + (gap - avg_half_cell) / timing_samples;
+    // Histogram (1 bin per sample, capped at 255)
+    bin = min(255, floor(gap));
+    mem[HIST_BUF + bin] += 1;
+  );
+
+  gap < minb ? (
+    bpm_state = 0;
+  ) : gap < mid ? (
+    bpm_period = (bpm_period * 3.0 + gap) / 4.0;
+    mid  = bpm_period * 1.5;
+    minb = bpm_period * 0.5;
+    maxb = bpm_period * 3.0;
+    bpm_state == 0 ? bpm_state = 1 : (push_bit(1); bpm_state = 0;);
+  ) : gap < maxb ? (
+    bpm_period = (bpm_period * 3.0 + gap * 0.5) / 4.0;
+    mid  = bpm_period * 1.5;
+    minb = bpm_period * 0.5;
+    maxb = bpm_period * 3.0;
+    bpm_state == 0 ? push_bit(0) : (push_bit(1); push_bit(0); bpm_state = 0;);
+  ) : (
+    bpm_period = spb * 0.5;
+    mid  = bpm_period * 1.5;
+    minb = bpm_period * 0.5;
+    maxb = bpm_period * 3.0;
+    bpm_state = 0;
+  );
+) : (stt += 1;);
+
+
+@gfx 520 580
+
+// ═══════════════════════════════════════════════════════════════════════
+// GFX — LTC Diagnostics Display (responsive)
+// ═══════════════════════════════════════════════════════════════════════
+
+// Mouse click detection
+mouse_click = (mouse_cap & 1) && !(last_mouse_cap & 1);
+
+// Background
+gfx_r=0.06; gfx_g=0.07; gfx_b=0.10; gfx_a=1;
+gfx_rect(0, 0, gfx_w, gfx_h, 1);
+
+// Responsive scaling
+ui_s = max(0.7, min(1.8, gfx_w / 520));
+pad = floor(12 * ui_s);
+cx = pad;
+cw = gfx_w - pad*2;
+cy = pad;
+row_h = floor(16 * ui_s);
+val_col = max(120, floor(cw * 0.36));
+fn_sz = max(10, floor(11 * ui_s));
+fh_sz = max(11, floor(12 * ui_s));
+
+// ── Helper: section header ──
+function draw_section(title) (
+  gfx_setfont(1, "Arial", fh_sz, 'b');
+  gfx_r=0.50; gfx_g=0.55; gfx_b=0.68;
+  gfx_x = cx; gfx_y = cy;
+  gfx_drawstr(title);
+  cy += floor(fh_sz + 5);
+  gfx_r=0.18; gfx_g=0.20; gfx_b=0.28;
+  gfx_rect(cx, cy, cw, 1, 1);
+  cy += floor(4 * ui_s);
+);
+
+// ── Helper: label + value row ──
+function draw_row(label, value) (
+  gfx_setfont(1, "Arial", fn_sz, 0);
+  gfx_r=0.42; gfx_g=0.46; gfx_b=0.58;
+  gfx_x = cx + 4; gfx_y = cy;
+  gfx_drawstr(label);
+  gfx_r=0.82; gfx_g=0.84; gfx_b=0.90;
+  gfx_x = cx + val_col; gfx_y = cy;
+  gfx_drawstr(value);
+  cy += row_h;
+);
+
+// ── Helper: colored label + value row ──
+function draw_row_c(label, value, cr, cg, cb) (
+  gfx_setfont(1, "Arial", fn_sz, 0);
+  gfx_r=0.42; gfx_g=0.46; gfx_b=0.58;
+  gfx_x = cx + 4; gfx_y = cy;
+  gfx_drawstr(label);
+  gfx_r=cr; gfx_g=cg; gfx_b=cb;
+  gfx_x = cx + val_col; gfx_y = cy;
+  gfx_drawstr(value);
+  cy += row_h;
+);
+
+
+// ═════════════════════════════════════════════════════════════════════
+// TITLE
+// ═════════════════════════════════════════════════════════════════════
+
+gfx_setfont(1, "Arial", floor(14 * ui_s), 'b');
+gfx_r=0.55; gfx_g=0.60; gfx_b=0.72;
+gfx_x = cx; gfx_y = cy;
+gfx_drawstr("LTC Diagnostics");
+gfx_setfont(1, "Arial", floor(9 * ui_s), 0);
+gfx_r=0.35; gfx_g=0.37; gfx_b=0.42;
+strcpy(#ver_str, "v1.2.0");
+gfx_measurestr(#ver_str, verw, verh);
+gfx_x = cx + cw - verw;
+gfx_y = cy + 2;
+gfx_drawstr(#ver_str);
+cy += floor(24 * ui_s);
+
+
+// ═════════════════════════════════════════════════════════════════════
+// TIMECODE DISPLAY
+// ═════════════════════════════════════════════════════════════════════
+
+// TC background
+tc_font = max(24, floor(32 * ui_s));
+tc_h = floor(tc_font * 1.6);
+gfx_r=0.08; gfx_g=0.09; gfx_b=0.12;
+gfx_rect(cx, cy, cw, tc_h, 1);
+// Border
+ltc_locked ? (
+  gfx_r=0.15; gfx_g=0.35; gfx_b=0.20;
+) : (
+  gfx_r=0.20; gfx_g=0.22; gfx_b=0.30;
+);
+gfx_rect(cx, cy, cw, 1, 1);
+gfx_rect(cx, cy+tc_h-1, cw, 1, 1);
+gfx_rect(cx, cy, 1, tc_h, 1);
+gfx_rect(cx+cw-1, cy, 1, tc_h, 1);
+
+// TC value
+ltc_locked ? (
+  gfx_r=0.20; gfx_g=0.88; gfx_b=0.38;
+) : (
+  gfx_r=0.35; gfx_g=0.37; gfx_b=0.45;
+);
+
+ltc_df_bit ? (
+  sprintf(#tc_disp, "%02d:%02d:%02d;%02d", ltc_h, ltc_m, ltc_s, ltc_f);
+) : (
+  sprintf(#tc_disp, "%02d:%02d:%02d:%02d", ltc_h, ltc_m, ltc_s, ltc_f);
+);
+
+gfx_setfont(1, "Courier New", tc_font, 'b');
+gfx_measurestr(#tc_disp, tcw, tch);
+gfx_x = cx + (cw - tcw) / 2;
+gfx_y = cy + (tc_h - tch) / 2;
+gfx_drawstr(#tc_disp);
+cy += tc_h + floor(8 * ui_s);
+
+
+// ═════════════════════════════════════════════════════════════════════
+// LOCK & SIGNAL
+// ═════════════════════════════════════════════════════════════════════
+
+draw_section("Lock & Signal");
+
+ltc_locked ? (
+  draw_row_c("Lock Status", "LOCKED", 0.20, 0.88, 0.38);
+) : (
+  draw_row_c("Lock Status", "UNLOCKED", 0.88, 0.20, 0.20);
+);
+
+peak_level > 0.000001 ? (
+  sprintf(#level_str, "%.1f dBFS", 20 * log10(peak_level));
+) : (
+  strcpy(#level_str, "-inf dBFS");
+);
+draw_row("Signal Level", #level_str);
+
+// Signal level bar
+bar_y = cy;
+bar_h = max(6, floor(8 * ui_s));
+gfx_r=0.12; gfx_g=0.13; gfx_b=0.18;
+gfx_rect(cx + 4, bar_y, cw - 8, bar_h, 1);
+peak_level > 0.000001 ? (
+  db_val = 20 * log10(peak_level);
+  bar_frac = max(0, min(1, (db_val + 60) / 60)); // -60dB to 0dB range
+  bar_fill = floor((cw - 8) * bar_frac);
+  db_val > -6 ? (
+    gfx_r=0.88; gfx_g=0.20; gfx_b=0.20; // red = hot
+  ) : db_val > -18 ? (
+    gfx_r=0.95; gfx_g=0.65; gfx_b=0.15; // yellow
+  ) : (
+    gfx_r=0.20; gfx_g=0.70; gfx_b=0.38; // green
+  );
+  gfx_rect(cx + 4, bar_y, bar_fill, bar_h, 1);
+);
+// Threshold marker
+thr_db = slider1;
+thr_frac = max(0, min(1, (thr_db + 60) / 60));
+thr_x = cx + 4 + floor((cw - 8) * thr_frac);
+gfx_r=0.95; gfx_g=0.95; gfx_b=0.95;
+gfx_rect(thr_x, bar_y - 1, 1, bar_h + 2, 1);
+cy += bar_h + floor(8 * ui_s);
+
+
+// ═════════════════════════════════════════════════════════════════════
+// FRAME RATE
+// ═════════════════════════════════════════════════════════════════════
+
+draw_section("Frame Rate");
+
+// Clickable frame rate selector buttons
+gfx_setfont(1, "Arial", fn_sz, 0);
+gfx_r=0.42; gfx_g=0.46; gfx_b=0.58;
+gfx_x = cx + 4; gfx_y = cy;
+gfx_drawstr("Expected");
+
+btn_x = cx + val_col;
+btn_y = cy - 1;
+btn_h = floor(18 * ui_s);
+btn_gap = floor(4 * ui_s);
+
+// Button labels and widths
+strcpy(#btn0, " 24 "); strcpy(#btn1, " 25 ");
+strcpy(#btn2, " 29.97DF "); strcpy(#btn3, " 30 ");
+
+bi = 0;
+loop(4,
+  bi == 0 ? strcpy(#btn_cur, #btn0) :
+  bi == 1 ? strcpy(#btn_cur, #btn1) :
+  bi == 2 ? strcpy(#btn_cur, #btn2) :
+            strcpy(#btn_cur, #btn3);
+  gfx_measurestr(#btn_cur, bw, bh);
+  btn_w = bw + 2;
+
+  // Hit test
+  mouse_click &&
+  mouse_x >= btn_x && mouse_x < btn_x + btn_w &&
+  mouse_y >= btn_y && mouse_y < btn_y + btn_h ? (
+    slider2 = bi;
+    update_params();
+    sliderchange(slider2);
+  );
+
+  // Draw button
+  fps_type == bi ? (
+    // Active button
+    gfx_r=0.20; gfx_g=0.50; gfx_b=0.80; gfx_a=1;
+    gfx_rect(btn_x, btn_y, btn_w, btn_h, 1);
+    gfx_r=0.95; gfx_g=0.97; gfx_b=1.0;
+  ) : (
+    // Inactive button
+    gfx_r=0.16; gfx_g=0.17; gfx_b=0.22; gfx_a=1;
+    gfx_rect(btn_x, btn_y, btn_w, btn_h, 1);
+    // Border
+    gfx_r=0.25; gfx_g=0.27; gfx_b=0.35;
+    gfx_rect(btn_x, btn_y, btn_w, 1, 1);
+    gfx_rect(btn_x, btn_y+btn_h-1, btn_w, 1, 1);
+    gfx_rect(btn_x, btn_y, 1, btn_h, 1);
+    gfx_rect(btn_x+btn_w-1, btn_y, 1, btn_h, 1);
+    gfx_r=0.65; gfx_g=0.67; gfx_b=0.72;
+  );
+  gfx_x = btn_x + 1; gfx_y = btn_y + (btn_h - bh) / 2;
+  gfx_drawstr(#btn_cur);
+
+  btn_x += btn_w + btn_gap;
+  bi += 1;
+);
+cy += row_h + 2;
+
+det_rate == 0 ? strcpy(#det_fps, "24fps") :
+det_rate == 1 ? strcpy(#det_fps, "25fps") :
+det_rate == 2 ? strcpy(#det_fps, "29.97DF") :
+det_rate == 3 ? strcpy(#det_fps, "30fps") :
+                strcpy(#det_fps, "Unknown");
+
+det_rate >= 0 && det_rate != fps_type ? (
+  draw_row_c("Detected", #det_fps, 0.95, 0.65, 0.15);
+  draw_row_c("Mismatch", "YES — check frame rate setting", 0.88, 0.20, 0.20);
+) : (
+  draw_row("Detected", #det_fps);
+);
+
+ltc_df_bit ? (
+  draw_row("Drop-Frame Flag", "Set (DF)");
+) : (
+  draw_row("Drop-Frame Flag", "Not set (NDF)");
+);
+
+cy += floor(4 * ui_s);
+
+
+// ═════════════════════════════════════════════════════════════════════
+// BIT TIMING
+// ═════════════════════════════════════════════════════════════════════
+
+draw_section("Bit Timing");
+
+sprintf(#spb_str, "%.1f samples (%.1f µs)", spb, spb / srate * 1000000);
+draw_row("Samples/Bit", #spb_str);
+
+sprintf(#hc_str, "%.1f samples", bpm_period);
+draw_row("Half-Cell Width", #hc_str);
+
+timing_samples > 0 ? (
+  sprintf(#min_str, "%.1f samples", min_half_cell);
+  draw_row("Min Transition", #min_str);
+  sprintf(#max_str, "%.1f samples", max_half_cell);
+  draw_row("Max Transition", #max_str);
+  sprintf(#avg_str, "%.1f samples", avg_half_cell);
+  draw_row("Avg Transition", #avg_str);
+
+  // Jitter (deviation from expected)
+  expected_half = spb * 0.5;
+  jitter = max_half_cell - min_half_cell;
+  jitter_pct = expected_half > 0 ? (jitter / expected_half * 100) : 0;
+  sprintf(#jit_str, "%.1f samples (%.1f%%)", jitter, jitter_pct);
+  jitter_pct > 20 ? (
+    draw_row_c("Jitter (p-p)", #jit_str, 0.88, 0.20, 0.20);
+  ) : jitter_pct > 10 ? (
+    draw_row_c("Jitter (p-p)", #jit_str, 0.95, 0.65, 0.15);
+  ) : (
+    draw_row("Jitter (p-p)", #jit_str);
+  );
+) : (
+  draw_row("Transitions", "No data");
+);
+
+cy += floor(4 * ui_s);
+
+
+// ═════════════════════════════════════════════════════════════════════
+// DECODER STATS
+// ═════════════════════════════════════════════════════════════════════
+
+draw_section("Decoder Statistics");
+
+sprintf(#bits_str, "%d", total_bits);
+draw_row("Total Bits", #bits_str);
+
+sprintf(#sync_str, "%d", total_syncs);
+draw_row("Sync Words Found", #sync_str);
+
+sprintf(#err_str, "%d", sync_errors);
+sync_errors > 0 ? (
+  draw_row_c("Invalid Frames", #err_str, 0.95, 0.65, 0.15);
+) : (
+  draw_row("Invalid Frames", #err_str);
+);
+
+last_sync_bits > 0 ? (
+  sprintf(#lsb_str, "%d bits", last_sync_bits);
+  last_sync_bits != 80 ? (
+    draw_row_c("Last Frame Size", #lsb_str, 0.88, 0.20, 0.20);
+  ) : (
+    draw_row("Last Frame Size", #lsb_str);
+  );
+);
+
+total_syncs > 0 ? (
+  err_rate = sync_errors / total_syncs * 100;
+  sprintf(#rate_str, "%.2f%%", err_rate);
+  err_rate > 1 ? (
+    draw_row_c("Error Rate", #rate_str, 0.88, 0.20, 0.20);
+  ) : err_rate > 0 ? (
+    draw_row_c("Error Rate", #rate_str, 0.95, 0.65, 0.15);
+  ) : (
+    draw_row("Error Rate", #rate_str);
+  );
+);
+
+cy += floor(4 * ui_s);
+
+
+// ═════════════════════════════════════════════════════════════════════
+// USER BITS
+// ═════════════════════════════════════════════════════════════════════
+
+draw_section("LTC Frame Flags & User Bits");
+
+bgf_mode_det ? (
+  sprintf(#bgf_str, "BGF0=%d  BGF1=%d  BGF2=%d  (EBU)", ltc_bgf0, ltc_bgf1, ltc_bgf2);
+) : (
+  sprintf(#bgf_str, "BGF0=%d  BGF1=%d  BGF2=%d  (SMPTE)", ltc_bgf0, ltc_bgf1, ltc_bgf2);
+);
+draw_row("Binary Group Flags", #bgf_str);
+
+// BGF meaning
+ltc_bgf0 == 1 && ltc_bgf1 == 0 ? (
+  draw_row("Format", "Eight-bit character set");
+) : ltc_bgf0 == 0 && ltc_bgf1 == 1 ? (
+  draw_row("Format", "Date/Timezone");
+) : ltc_bgf0 == 0 && ltc_bgf1 == 0 ? (
+  draw_row("Format", "Unspecified");
+) : (
+  draw_row_c("Format", "Reserved", 0.95, 0.65, 0.15);
+);
+
+// User bits hex (larger font)
+ub_byte1 = ub2 * 16 + ub1;
+ub_byte2 = ub4 * 16 + ub3;
+ub_byte3 = ub6 * 16 + ub5;
+ub_byte4 = ub8 * 16 + ub7;
+
+sprintf(#ub_hex_str, "%02X  %02X  %02X  %02X", ub_byte1, ub_byte2, ub_byte3, ub_byte4);
+gfx_setfont(1, "Arial", fn_sz, 0);
+gfx_r=0.42; gfx_g=0.46; gfx_b=0.58;
+gfx_x = cx + 4; gfx_y = cy;
+gfx_drawstr("User Bits");
+gfx_setfont(1, "Courier New", max(12, floor(14 * ui_s)), 'b');
+gfx_r=0.82; gfx_g=0.84; gfx_b=0.90;
+gfx_x = cx + val_col; gfx_y = cy;
+gfx_drawstr(#ub_hex_str);
+cy += row_h;
+
+// Always show Characters interpretation
+ub_ch1 = max(32, ub_byte1 & 0x7F);
+ub_ch2 = max(32, ub_byte2 & 0x7F);
+ub_ch3 = max(32, ub_byte3 & 0x7F);
+ub_ch4 = max(32, ub_byte4 & 0x7F);
+sprintf(#ub_char_str, "\"%c%c%c%c\"", ub_ch1, ub_ch2, ub_ch3, ub_ch4);
+gfx_setfont(1, "Arial", fn_sz, 0);
+gfx_r=0.42; gfx_g=0.46; gfx_b=0.58;
+gfx_x = cx + 4; gfx_y = cy;
+gfx_drawstr("As Characters");
+gfx_setfont(1, "Courier New", max(12, floor(14 * ui_s)), 'b');
+ltc_bgf0 == 1 && ltc_bgf1 == 0 ? (
+  gfx_r=0.20; gfx_g=0.85; gfx_b=0.38;  // green = active format
+) : (
+  gfx_r=0.55; gfx_g=0.57; gfx_b=0.62;  // dim = not the declared format
+);
+gfx_x = cx + val_col; gfx_y = cy;
+gfx_drawstr(#ub_char_str);
+cy += row_h;
+
+// Always show Date/TZ interpretation (SMPTE 309M)
+ub_tz  = ub_byte1;
+ub_day = (ub4 & 0x3) * 10 + ub3;
+ub_mon = (ub6 & 0x1) * 10 + ub5;
+ub_yr  = (ub8 & 0xF) * 10 + ub7;
+sprintf(#ub_date_str, "20%02d-%02d-%02d  TZ:%02d", ub_yr, ub_mon, ub_day, ub_tz);
+gfx_setfont(1, "Arial", fn_sz, 0);
+gfx_r=0.42; gfx_g=0.46; gfx_b=0.58;
+gfx_x = cx + 4; gfx_y = cy;
+gfx_drawstr("As Date/TZ");
+gfx_setfont(1, "Courier New", max(12, floor(14 * ui_s)), 'b');
+ltc_bgf0 == 0 && ltc_bgf1 == 1 ? (
+  gfx_r=0.20; gfx_g=0.85; gfx_b=0.38;
+) : (
+  gfx_r=0.55; gfx_g=0.57; gfx_b=0.62;
+);
+gfx_x = cx + val_col; gfx_y = cy;
+gfx_drawstr(#ub_date_str);
+cy += row_h;
+
+cy += floor(4 * ui_s);
+
+
+// ═════════════════════════════════════════════════════════════════════
+// BIT POSITION HISTOGRAM (80 bits per frame)
+// ═════════════════════════════════════════════════════════════════════
+
+draw_section("Frame Bit Histogram");
+
+bh_h = max(50, floor(60 * ui_s));
+bh_w = cw;
+bh_frames = mem[FRAME_COUNT];
+
+// Background
+gfx_r=0.08; gfx_g=0.09; gfx_b=0.12;
+gfx_rect(cx, cy, bh_w, bh_h, 1);
+
+bh_frames > 0 ? (
+  bh_bar_w = max(1, floor(bh_w / 80));
+
+  // Bit group labels at top
+  gfx_setfont(1, "Arial", max(7, floor(8 * ui_s)), 0);
+
+  bh_i = 0;
+  loop(80,
+    bh_x = cx + floor(bh_i * bh_w / 80);
+    bh_ratio = mem[FRAME_HIST + bh_i] / bh_frames;
+    bh_bar_h = max(0, floor(bh_ratio * (bh_h - 2)));
+
+    // Color: green=always 0 or always 1, yellow=sometimes, red=~50/50
+    bh_dist = abs(bh_ratio - 0.5) * 2;  // 0=random, 1=stable
+    bh_dist > 0.9 ? (
+      gfx_r=0.20; gfx_g=0.70; gfx_b=0.38;  // stable
+    ) : bh_dist > 0.5 ? (
+      gfx_r=0.95; gfx_g=0.65; gfx_b=0.15;  // noisy
+    ) : (
+      gfx_r=0.88; gfx_g=0.20; gfx_b=0.20;  // flipping ~50/50
+    );
+
+    gfx_rect(bh_x, cy + bh_h - 1 - bh_bar_h, bh_bar_w, bh_bar_h, 1);
+    bh_i += 1;
+  );
+
+  // Reference lines and labels
+  gfx_setfont(1, "Arial", max(7, floor(8 * ui_s)), 0);
+  gfx_r=0.30; gfx_g=0.32; gfx_b=0.40;
+
+  // 50% line
+  gfx_rect(cx, cy + floor(bh_h / 2), bh_w, 1, 1);
+
+  // Bit group markers: TC data, user bits, flags, sync
+  // Frames: 0-3, UB: 4-7, Frames: 8-9, Flags: 10-11, UB: 12-15, ...
+  gfx_r=0.40; gfx_g=0.42; gfx_b=0.50;
+  sprintf(#bh_info, "80 bits/frame | %d frames | bar=%%1s", bh_frames);
+  gfx_x = cx + 2; gfx_y = cy + bh_h - floor(10 * ui_s);
+  gfx_drawstr(#bh_info);
+
+  // Mark sync word region (bits 64-79)
+  gfx_r=0.25; gfx_g=0.25; gfx_b=0.35; gfx_a=0.4;
+  sw_x = cx + floor(64 * bh_w / 80);
+  gfx_rect(sw_x, cy, bh_w - (sw_x - cx), bh_h, 1);
+  gfx_a = 1;
+  gfx_setfont(1, "Arial", max(7, floor(8 * ui_s)), 0);
+  gfx_r=0.50; gfx_g=0.52; gfx_b=0.60;
+  gfx_x = sw_x + 2; gfx_y = cy + 2;
+  gfx_drawstr("sync");
+
+  // Mark key bit positions
+  // Bit 10=DF, 27=parity/BGF0(EBU), 43=BGF0(SMPTE)/BGF2(EBU), 58/59=BGF/parity
+  gfx_r=0.60; gfx_g=0.60; gfx_b=0.70;
+  gfx_setfont(1, "Arial", max(6, floor(7 * ui_s)), 0);
+
+  bh_mk_x = cx + floor(10 * bh_w / 80);
+  gfx_x = bh_mk_x; gfx_y = cy + 1;
+  gfx_drawstr("DF");
+
+  bh_mk_x = cx + floor(27 * bh_w / 80);
+  gfx_x = bh_mk_x; gfx_y = cy + 1;
+  gfx_drawstr("27");
+
+  bh_mk_x = cx + floor(43 * bh_w / 80);
+  gfx_x = bh_mk_x; gfx_y = cy + 1;
+  gfx_drawstr("43");
+
+  bh_mk_x = cx + floor(58 * bh_w / 80);
+  gfx_x = bh_mk_x; gfx_y = cy + 1;
+  gfx_drawstr("58");
+) : (
+  gfx_setfont(1, "Arial", fn_sz, 0);
+  gfx_r=0.35; gfx_g=0.37; gfx_b=0.42;
+  gfx_x = cx + 4; gfx_y = cy + bh_h / 2 - 6;
+  gfx_drawstr("No frame data");
+);
+
+cy += bh_h + floor(8 * ui_s);
+
+
+// ═════════════════════════════════════════════════════════════════════
+// WAVEFORM DISPLAY
+// ═════════════════════════════════════════════════════════════════════
+
+draw_section("Input Waveform");
+
+wave_display_h = max(40, floor(60 * ui_s));
+wave_display_w = cw;
+
+// Waveform background
+gfx_r=0.08; gfx_g=0.09; gfx_b=0.12;
+gfx_rect(cx, cy, wave_display_w, wave_display_h, 1);
+
+// Center line
+gfx_r=0.18; gfx_g=0.20; gfx_b=0.26;
+gfx_rect(cx, cy + wave_display_h / 2, wave_display_w, 1, 1);
+
+// Threshold lines
+thr_y_pos = floor(wave_display_h / 2 * (1 - thr));
+thr_y_neg = floor(wave_display_h / 2 * (1 + thr));
+gfx_r=0.40; gfx_g=0.20; gfx_b=0.20; gfx_a=0.6;
+gfx_rect(cx, cy + thr_y_pos, wave_display_w, 1, 1);
+gfx_rect(cx, cy + thr_y_neg, wave_display_w, 1, 1);
+gfx_a = 1;
+
+// Draw waveform (connected lines)
+gfx_r=0.30; gfx_g=0.70; gfx_b=0.95;
+step = wave_len / wave_display_w;
+prev_wy = cy + wave_display_h / 2;
+i = 0;
+loop(wave_display_w,
+  idx = floor(i * step);
+  sample_val = mem[WAVE_BUF + ((wave_idx + idx) % wave_len)];
+  sample_val = max(-1, min(1, sample_val));
+  wy = cy + wave_display_h / 2 - floor(sample_val * (wave_display_h - 4) / 2);
+  // Vertical line connecting to previous point
+  line_y = min(wy, prev_wy);
+  line_h = max(1, abs(wy - prev_wy) + 1);
+  gfx_rect(cx + i, line_y, 1, line_h, 1);
+  prev_wy = wy;
+  i += 1;
+);
+
+cy += wave_display_h + floor(8 * ui_s);
+
+
+// ═════════════════════════════════════════════════════════════════════
+// TIMING HISTOGRAM
+// ═════════════════════════════════════════════════════════════════════
+
+draw_section("Transition Timing Histogram");
+
+hist_h = max(36, floor(50 * ui_s));
+hist_w = cw;
+
+// Histogram background
+gfx_r=0.08; gfx_g=0.09; gfx_b=0.12;
+gfx_rect(cx, cy, hist_w, hist_h, 1);
+
+// Find range of interest and peak
+timing_samples > 0 ? (
+  hist_start = max(0, floor(min_half_cell) - 2);
+  hist_end = min(255, floor(max_half_cell) + 2);
+  hist_range = max(1, hist_end - hist_start);
+  hist_peak = 0;
+  j = hist_start;
+  loop(hist_range,
+    mem[HIST_BUF + j] > hist_peak ? hist_peak = mem[HIST_BUF + j];
+    j += 1;
+  );
+
+  hist_peak > 0 ? (
+    // Draw bars
+    bar_w = max(1, floor(hist_w / hist_range));
+    j = 0;
+    loop(hist_range,
+      count = mem[HIST_BUF + hist_start + j];
+      count > 0 ? (
+        bh = max(1, floor(count / hist_peak * (hist_h - 4)));
+        bx = cx + floor(j * hist_w / hist_range);
+
+        // Color: green near expected half-cell, yellow/red further away
+        expected_half = spb * 0.5;
+        dist = abs(hist_start + j - expected_half) / expected_half;
+        dist < 0.3 ? (
+          gfx_r=0.20; gfx_g=0.70; gfx_b=0.38;
+        ) : dist < 0.6 ? (
+          gfx_r=0.95; gfx_g=0.65; gfx_b=0.15;
+        ) : (
+          gfx_r=0.88; gfx_g=0.20; gfx_b=0.20;
+        );
+        gfx_rect(bx, cy + hist_h - bh, bar_w, bh, 1);
+      );
+      j += 1;
+    );
+
+    // Labels
+    gfx_setfont(1, "Arial", max(8, floor(9 * ui_s)), 0);
+    gfx_r=0.40; gfx_g=0.42; gfx_b=0.50;
+    sprintf(#hl, "%d", hist_start);
+    gfx_x = cx + 2; gfx_y = cy + hist_h - floor(10 * ui_s);
+    gfx_drawstr(#hl);
+    sprintf(#hr, "%d smp", hist_end);
+    gfx_measurestr(#hr, hrw, hrh);
+    gfx_x = cx + hist_w - hrw - 2; gfx_y = cy + hist_h - floor(10 * ui_s);
+    gfx_drawstr(#hr);
+  );
+) : (
+  gfx_setfont(1, "Arial", 11, 0);
+  gfx_r=0.35; gfx_g=0.37; gfx_b=0.42;
+  gfx_x = cx + 4; gfx_y = cy + hist_h / 2 - 6;
+  gfx_drawstr("No timing data");
+);
+
+cy += hist_h + floor(8 * ui_s);
+
+
+// ═════════════════════════════════════════════════════════════════════
+// SAMPLE RATE
+// ═════════════════════════════════════════════════════════════════════
+
+gfx_setfont(1, "Arial", max(8, floor(9 * ui_s)), 0);
+gfx_r=0.30; gfx_g=0.32; gfx_b=0.38;
+sprintf(#sr_str, "Sample Rate: %d Hz  |  Channels: %d", srate, num_ch);
+gfx_x = cx; gfx_y = cy;
+gfx_drawstr(#sr_str);
+
+// Store mouse state for click detection
+last_mouse_cap = mouse_cap;

@@ -3,7 +3,7 @@
 --
 -- Standalone script: Regions to LTC — generate LTC audio items from project regions
 -- @noindex
--- @version 1.1.1
+-- @version 1.2.0
 
 if not reaper.ImGui_GetBuiltinPath then
   reaper.MB(

@@ -12,11 +12,11 @@
 # fps_type: 0=24fps  1=25fps  2=29.97DF  3=30fps
 #
 # @noindex
-# @version 1.1.1
+# @version 1.2.0
 
 from __future__ import annotations
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 import sys
 import struct

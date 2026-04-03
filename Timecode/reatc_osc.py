@@ -28,11 +28,11 @@
 # OSC message sent: <address> ,iiiii  H M S F type  (5 big-endian int32 args)
 #
 # @noindex
-# @version 1.1.1
+# @version 1.2.0
 
 from __future__ import annotations
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 import sys
 import socket
