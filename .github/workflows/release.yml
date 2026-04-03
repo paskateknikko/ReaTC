@@ -100,6 +100,20 @@ jobs:
           mkdir -p "${DIST_DIR}/UserPlugins"
           cp extension-binaries/reaper_reatc* "${DIST_DIR}/UserPlugins/"
 
+      - name: Generate README PDF
+        run: |
+          DIST_DIR="dist/${{ steps.version.outputs.index_name }}-${{ steps.version.outputs.version }}"
+          pip install weasyprint
+          # Strip badges and Buy Me A Coffee link for PDF
+          sed '/shields\.io\|buymeacoffee\|img\.shields/d' "${DIST_DIR}/README.md" > "${DIST_DIR}/readme_clean.md"
+          pandoc "${DIST_DIR}/readme_clean.md" \
+            --pdf-engine=weasyprint \
+            --resource-path="${DIST_DIR}" \
+            -o "${DIST_DIR}/README.pdf"
+          rm "${DIST_DIR}/readme_clean.md"
+          # Remove images dir from dist (only needed for PDF generation)
+          rm -rf "${DIST_DIR}/images"
+
       - name: Verify build artifacts
         run: python3 build/verify.py --version "${{ steps.version.outputs.version }}"
 
