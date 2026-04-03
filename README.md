@@ -30,19 +30,13 @@ https://github.com/paskateknikko/ReaTC/raw/reapack/index.xml
 
 ### Manual Installation
 
-1. Download the latest release from [GitHub Releases](https://github.com/paskateknikko/ReaTC/releases)
-2. Copy `Scripts/ReaTC/` to your REAPER Scripts directory:
-   - **Windows:** `%APPDATA%\REAPER\Scripts\`
-   - **macOS:** `~/Library/Application Support/REAPER/Scripts/`
-3. Copy `Effects/ReaTC/` to your REAPER Effects directory:
-   - **Windows:** `%APPDATA%\REAPER\Effects\`
-   - **macOS:** `~/Library/Application Support/REAPER/Effects/`
-4. *(Optional)* Copy the C++ extension binary to REAPER UserPlugins:
-   - **Windows:** `%APPDATA%\REAPER\UserPlugins\reaper_reatc64.dll`
-   - **macOS ARM:** `~/Library/Application Support/REAPER/UserPlugins/reaper_reatc-arm64.dylib`
-   - **macOS Intel:** `~/Library/Application Support/REAPER/UserPlugins/reaper_reatc-x86_64.dylib`
-   - Restart REAPER after adding the extension — native plugins are only loaded at startup.
-5. In REAPER: Actions > Show action list > Load ReaScript > select `reatc.lua`
+1. Download the latest **ReaTC-x.x.x.zip** from [GitHub Releases](https://github.com/paskateknikko/ReaTC/releases)
+2. Extract the zip contents into your REAPER resource folder:
+   - **Windows:** `%APPDATA%\REAPER\`
+   - **macOS:** `~/Library/Application Support/REAPER/`
+   - The zip contains `Scripts/`, `Effects/`, and `UserPlugins/` folders that merge with your existing REAPER resource folder
+3. **Restart REAPER** — the C++ extension is only loaded at startup
+4. In REAPER: Actions > Show action list > Load ReaScript > select `Scripts/ReaTC/Timecode/reatc.lua`
 
 
 ---
@@ -70,6 +64,12 @@ https://github.com/paskateknikko/ReaTC/raw/reapack/index.xml
 - **Dark UI** — unified dark style across Lua script and JSFX; scalable TC display
 - **Cross-platform** — macOS (10.15+) and Windows (10+); Python 3 standard library only
 - **ReaPack compatible** — install via package manager; ReaImGui auto-installed as dependency
+
+## Use Cases
+
+- **Playback sync** — play a REAPER project and broadcast timecode to lighting consoles, video servers, or other devices via Art-Net, OSC, MTC, or LTC
+- **Timecode format conversion** — convert between any supported formats without playback (e.g. MTC→LTC, LTC→Art-Net, MTC→OSC); all outputs run whenever valid TC is present, independent of REAPER's transport state
+- **Offline LTC rendering** — bake LTC audio from project regions for pre-programmed shows or backup timecode tracks
 
 ## Usage
 
@@ -102,7 +102,7 @@ Click the gear icon to access JSFX settings (framerate, LTC threshold, output le
 
 #### Step 2: Run the Lua script
 
-1. Actions menu > search "ReaTC" > run **Art-Net and MIDI Timecode sender for REAPER**
+1. Click the **"Open ReaTC Script"** button in the JSFX Network output section, **or** Actions menu > search "ReaTC" > run **Art-Net and MIDI Timecode sender for REAPER**
 2. The script window shows the active timecode and output status
 3. Click **Settings** to configure Art-Net and OSC destinations
 
@@ -132,7 +132,7 @@ In the JSFX plugin UI, enable the outputs you need:
 
 1. Run the ReaTC script and open **Settings**
 2. Set the **destination IP** (e.g., `2.0.0.1` for Art-Net unicast, or `2.255.255.255` for broadcast)
-3. Enable **Art-Net Output** — packets send during playback
+3. Enable **Art-Net Output** — packets send whenever valid TC is present
 
 ### OSC Timecode Output
 
