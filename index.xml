@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="ReaTC" commit="2255bbb2d62302e96e5f71b08bb057b5bbd2b95f">
+<index version="1" name="ReaTC" commit="4a4653135a56c97dfe5e359699c1032b2a4f76ca">
   <category name="Timecode">
     <reapack name="reatc.lua" type="script" desc="Art-Net and MIDI Timecode sender for REAPER">
       <metadata>
@@ -61,6 +61,20 @@ GitHub
         <source platform="darwin64" type="extension" file="reaper_reatc-x86_64.dylib">https://github.com/paskateknikko/ReaTC/raw/2255bbb2d62302e96e5f71b08bb057b5bbd2b95f/Timecode/reaper_reatc-x86_64.dylib</source>
         <source platform="win64" type="extension" file="reaper_reatc64.dll">https://github.com/paskateknikko/ReaTC/raw/2255bbb2d62302e96e5f71b08bb057b5bbd2b95f/Timecode/reaper_reatc64.dll</source>
       </version>
+      <version name="1.2.1" author="Tuukka Aimasmäki" time="2026-04-03T23:40:10Z">
+        <changelog><![CDATA[### Changed]]></changelog>
+        <source main="main">https://github.com/paskateknikko/ReaTC/raw/4a4653135a56c97dfe5e359699c1032b2a4f76ca/Timecode/reatc.lua</source>
+        <source main="main" file="reatc_regions_to_ltc.lua">https://github.com/paskateknikko/ReaTC/raw/4a4653135a56c97dfe5e359699c1032b2a4f76ca/Timecode/reatc_regions_to_ltc.lua</source>
+        <source file="reatc_core.lua">https://github.com/paskateknikko/ReaTC/raw/4a4653135a56c97dfe5e359699c1032b2a4f76ca/Timecode/reatc_core.lua</source>
+        <source file="reatc_ui.lua">https://github.com/paskateknikko/ReaTC/raw/4a4653135a56c97dfe5e359699c1032b2a4f76ca/Timecode/reatc_ui.lua</source>
+        <source file="reatc_outputs.lua">https://github.com/paskateknikko/ReaTC/raw/4a4653135a56c97dfe5e359699c1032b2a4f76ca/Timecode/reatc_outputs.lua</source>
+        <source file="reatc_artnet.py">https://github.com/paskateknikko/ReaTC/raw/4a4653135a56c97dfe5e359699c1032b2a4f76ca/Timecode/reatc_artnet.py</source>
+        <source file="reatc_ltcgen.py">https://github.com/paskateknikko/ReaTC/raw/4a4653135a56c97dfe5e359699c1032b2a4f76ca/Timecode/reatc_ltcgen.py</source>
+        <source file="reatc_osc.py">https://github.com/paskateknikko/ReaTC/raw/4a4653135a56c97dfe5e359699c1032b2a4f76ca/Timecode/reatc_osc.py</source>
+        <source platform="darwin-arm64" type="extension" file="reaper_reatc-arm64.dylib">https://github.com/paskateknikko/ReaTC/raw/4a4653135a56c97dfe5e359699c1032b2a4f76ca/Timecode/reaper_reatc-arm64.dylib</source>
+        <source platform="darwin64" type="extension" file="reaper_reatc-x86_64.dylib">https://github.com/paskateknikko/ReaTC/raw/4a4653135a56c97dfe5e359699c1032b2a4f76ca/Timecode/reaper_reatc-x86_64.dylib</source>
+        <source platform="win64" type="extension" file="reaper_reatc64.dll">https://github.com/paskateknikko/ReaTC/raw/4a4653135a56c97dfe5e359699c1032b2a4f76ca/Timecode/reaper_reatc64.dll</source>
+      </version>
     </reapack>
     <reapack name="reatc_ltc_diag.jsfx" type="effect" desc="ReaTC LTC Diagnostics">
       <metadata>
@@ -74,6 +88,9 @@ GitHub
       </metadata>
       <version name="1.2.0" author="ReaTC" time="2026-04-03T22:47:40Z">
         <source>https://github.com/paskateknikko/ReaTC/raw/2255bbb2d62302e96e5f71b08bb057b5bbd2b95f/Timecode/reatc_ltc_diag.jsfx</source>
+      </version>
+      <version name="1.2.1" author="ReaTC" time="2026-04-03T23:40:10Z">
+        <source>https://github.com/paskateknikko/ReaTC/raw/4a4653135a56c97dfe5e359699c1032b2a4f76ca/Timecode/reatc_ltc_diag.jsfx</source>
       </version>
     </reapack>
     <reapack name="reatc_tc.jsfx" type="effect" desc="ReaTC Timecode Converter">
@@ -103,6 +120,10 @@ ReaTC
       <version name="1.2.0" author="Tuukka Aimasmäki" time="2026-04-03T22:47:40Z">
         <changelog><![CDATA[### Added]]></changelog>
         <source>https://github.com/paskateknikko/ReaTC/raw/2255bbb2d62302e96e5f71b08bb057b5bbd2b95f/Timecode/reatc_tc.jsfx</source>
+      </version>
+      <version name="1.2.1" author="Tuukka Aimasmäki" time="2026-04-03T23:40:10Z">
+        <changelog><![CDATA[### Changed]]></changelog>
+        <source>https://github.com/paskateknikko/ReaTC/raw/4a4653135a56c97dfe5e359699c1032b2a4f76ca/Timecode/reatc_tc.jsfx</source>
       </version>
     </reapack>
   </category>
