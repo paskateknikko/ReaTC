@@ -13,7 +13,7 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 # ReaTC Changelog
 
 
-## [1.2.0] - Unreleased
+## [1.2.0] - 2026-04-04
 
 ### Added
 

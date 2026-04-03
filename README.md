@@ -54,12 +54,14 @@ https://github.com/paskateknikko/ReaTC/raw/reapack/index.xml
 - **Art-Net TimeCode** — broadcasts SMPTE TC over UDP (port 6454); unicast or broadcast; configurable IP
 - **MIDI Timecode (MTC)** — sample-accurate quarter-frame generator via JSFX; no external MIDI library required
 - **OSC** — broadcasts SMPTE TC as raw OSC (`/tc ,iiiii H M S F type`) at ~30 fps; configurable destination IP, port, and address
-- **LTC audio generator** — encodes timecode to LTC audio with rise-time filtering per SMPTE 12M spec
+- **LTC audio generator** — encodes timecode to LTC audio with slew-rate shaping matching REAPER's native LTC waveform
+- **LTC User Bits** — configurable user bits format (Characters/Date-Timezone) with SMPTE/EBU BGF flag positioning
 - **Bake LTC from regions** — standalone tool generates offline LTC WAV files from project regions with per-region TC start, FPS, and output level
 
 ### General
 - **TC Offset** — user-configurable HH:MM:SS:FF offset applied before all outputs; supports drop-frame wrap-around
-- **Network sync status** — Art-Net and OSC indicators show packet counts and daemon health
+- **LTC Diagnostics** — dedicated analysis JSFX with waveform display, bit histogram, timing analysis, and auto-detected frame rate / BGF positioning
+- **Network sync status** — Art-Net and OSC toggleable directly from the main window
 - **All standard frame rates** — 24fps (Film), 25fps (EBU/PAL), 29.97fps Drop Frame, 30fps (SMPTE)
 - **Dark UI** — unified dark style across Lua script and JSFX; scalable TC display
 - **Cross-platform** — macOS (10.15+) and Windows (10+); Python 3 standard library only
@@ -96,7 +98,11 @@ When collapsed, the plugin shows a compact timecode display:
 
 ![JSFX plugin — compact view](images/jsfx-compact.png)
 
-Click the gear icon to access JSFX settings (framerate, LTC threshold, output level):
+When resized wider, the plugin shows a compact timecode display:
+
+![JSFX plugin — wide compact view](images/jsfx-wide.png)
+
+Click the ⚙ icon to access JSFX settings (framerate, LTC threshold, output level, user bits, BGF mode):
 
 ![JSFX settings dialog](images/jsfx-settings.png)
 
@@ -148,6 +154,16 @@ In the JSFX plugin UI, enable the outputs you need:
 4. Rendered WAV items are placed on a `LTC [rendered]` track
 
 ![Bake LTC from Regions — per-region TC start and framerate](images/regions-to-ltc.png)
+
+### LTC User Bits
+
+In the JSFX settings, set **User Bits** format (Characters or Date/Timezone) and enter 4 byte values (0–255). These are embedded in the LTC stream per SMPTE 12M. At 25fps, you can choose between SMPTE (REAPER-compatible) and EBU standard BGF bit positions.
+
+### LTC Diagnostics
+
+Add the **ReaTC LTC Diagnostics** JSFX to the same track (or any track receiving LTC audio) to inspect the signal in detail. Auto-detects frame rate, BGF positioning, and decodes user bits.
+
+![LTC Diagnostics — signal analysis with bit histogram and waveform](images/diagnostics.png)
 
 
 ## Troubleshooting
