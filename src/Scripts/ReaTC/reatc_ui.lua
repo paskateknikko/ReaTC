@@ -65,6 +65,61 @@ return function(core, outputs)
     return str:sub(1, n - 3) .. "..."
   end
 
+  --- Render a Preferred IP (CIDR) + Interface override + resolved status block.
+  -- Mirrors the gma3 "Preferred IP / Interface" pattern. The preferred IP is a
+  -- portable CIDR (e.g. "10.0.0.0/8"); the interface override is a machine-specific
+  -- escape hatch for multi-NIC hosts with overlapping subnets.
+  -- Fields are stacked vertically so the block fits in narrow settings windows.
+  -- @param id string unique ImGui id suffix
+  -- @param pref_ip string current CIDR ("" = none)
+  -- @param pref_iface string current interface override ("" = Auto)
+  -- @param on_change function(new_ip, new_iface) called on any change
+  local function preferred_ip_block(id, pref_ip, pref_iface, on_change)
+    ImGui.SetNextItemWidth(ctx, 180)
+    local ip_changed, new_ip = ImGui.InputText(ctx, 'Preferred IP##' .. id, pref_ip)
+    if ip_changed then
+      if new_ip == "" or core.is_valid_cidr(new_ip) then
+        on_change(new_ip, pref_iface)
+      end
+    end
+    if ImGui.IsItemHovered(ctx) then
+      ImGui.SetTooltip(ctx,
+        "CIDR range (e.g. 10.0.0.0/8) or a single IP.\n" ..
+        "Binds the daemon to the local NIC whose IP\n" ..
+        "falls inside this range. Leave empty for Auto.")
+    end
+
+    ImGui.SetNextItemWidth(ctx, 180)
+    local iface_preview = (pref_iface == "") and "Auto" or pref_iface
+    if ImGui.BeginCombo(ctx, 'Interface##' .. id, iface_preview) then
+      if ImGui.Selectable(ctx, 'Auto (match by Preferred IP)', pref_iface == "") then
+        on_change(pref_ip, "")
+      end
+      for _, it in ipairs(core.list_interfaces()) do
+        local label = string.format("%s  \u{2014} %s", it.iface, it.ip)
+        if ImGui.Selectable(ctx, label, it.iface == pref_iface) then
+          on_change(pref_ip, it.iface)
+        end
+      end
+      ImGui.EndCombo(ctx)
+    end
+    ImGui.SameLine(ctx, 0, 6)
+    if ImGui.SmallButton(ctx, 'Refresh##ifaces-' .. id) then
+      core.list_interfaces(true)
+    end
+
+    if pref_ip == "" and pref_iface == "" then
+      ImGui.TextColored(ctx, C.dim, "Bound to: Auto (OS default route)")
+    else
+      local _, label = core.resolve_bind_ip(pref_ip, pref_iface)
+      if label then
+        ImGui.TextColored(ctx, C.dim, "Bound to: " .. label)
+      else
+        ImGui.TextColored(ctx, C.orange, "No match \u{2014} using default route")
+      end
+    end
+  end
+
   -- ── Main view ──────────────────────────────────────────────────────────────
 
   local function output_toggle(id, enabled, error_state)
@@ -166,7 +221,9 @@ return function(core, outputs)
 
     -- ── Art-Net ──────────────────────────────────────────────────────────────
     ImGui.SeparatorText(ctx, 'Art-Net Output')
-    ImGui.TextColored(ctx, C.dim, "Art-Net timecode broadcast (lighting consoles, media servers)")
+    ImGui.PushStyleColor(ctx, ImGui.Col_Text, C.dim)
+    ImGui.TextWrapped(ctx, "Art-Net timecode broadcast (lighting consoles, media servers)")
+    ImGui.PopStyleColor(ctx)
 
     local an_changed, an_val = ImGui.Checkbox(ctx, 'Enable##artnet', s.artnet_enabled)
     if an_changed then
@@ -176,19 +233,37 @@ return function(core, outputs)
     end
 
     ImGui.SameLine(ctx)
-    ImGui.SetNextItemWidth(ctx, 180)
+    ImGui.SetNextItemWidth(ctx, 220)
     local ip_changed, new_ip = ImGui.InputText(ctx, 'Destination IP', s.dest_ip)
     if ip_changed then
-      if core.is_valid_ipv4(new_ip) then
+      if core.is_valid_ipv4_list(new_ip) then
         s.dest_ip = new_ip
         core.save_settings()
         if s.artnet_enabled then
           outputs.stop_artnet_daemon()
         end
       elseif new_ip ~= "" then
-        ImGui.TextColored(ctx, C.red, "Invalid IP: must be aaa.bbb.ccc.ddd (0-255 each)")
+        ImGui.TextColored(ctx, C.red, "Invalid: use aaa.bbb.ccc.ddd, comma-separated for multi-unicast")
       end
     end
+    if ImGui.IsItemHovered(ctx) then
+      ImGui.SetTooltip(ctx,
+        "Single IP (e.g. 2.0.0.1 or 192.168.0.50),\n" ..
+        "or a comma-separated list for multi-unicast\n" ..
+        "(e.g. 192.168.0.50, 192.168.0.51).")
+    end
+
+    preferred_ip_block('artnet', s.artnet_preferred_ip, s.artnet_preferred_iface,
+      function(new_ip, new_iface)
+        local changed = (new_ip ~= s.artnet_preferred_ip)
+                     or (new_iface ~= s.artnet_preferred_iface)
+        if changed then
+          s.artnet_preferred_ip    = new_ip
+          s.artnet_preferred_iface = new_iface
+          core.save_settings()
+          if s.artnet_enabled then outputs.stop_artnet_daemon() end
+        end
+      end)
 
     if s.artnet_error then
       ImGui.TextColored(ctx, C.red, "Error: " .. trunc(s.artnet_error, 60))
@@ -205,7 +280,9 @@ return function(core, outputs)
 
     -- ── OSC ──────────────────────────────────────────────────────────────────
     ImGui.SeparatorText(ctx, 'OSC Output')
-    ImGui.TextColored(ctx, C.dim, "Open Sound Control output (QLab, MA3, EOS, etc.)")
+    ImGui.PushStyleColor(ctx, ImGui.Col_Text, C.dim)
+    ImGui.TextWrapped(ctx, "Open Sound Control output (QLab, MA3, EOS, etc.)")
+    ImGui.PopStyleColor(ctx)
 
     local osc_changed, osc_val = ImGui.Checkbox(ctx, 'Enable##osc', s.osc_enabled)
     if osc_changed then
@@ -251,6 +328,18 @@ return function(core, outputs)
         ImGui.TextColored(ctx, C.red, "OSC address must start with /")
       end
     end
+
+    preferred_ip_block('osc', s.osc_preferred_ip, s.osc_preferred_iface,
+      function(new_ip, new_iface)
+        local changed = (new_ip ~= s.osc_preferred_ip)
+                     or (new_iface ~= s.osc_preferred_iface)
+        if changed then
+          s.osc_preferred_ip    = new_ip
+          s.osc_preferred_iface = new_iface
+          core.save_settings()
+          if s.osc_enabled then outputs.stop_osc_daemon() end
+        end
+      end)
 
     if s.osc_error then
       ImGui.TextColored(ctx, C.red, "Error: " .. trunc(s.osc_error, 60))
@@ -318,8 +407,9 @@ return function(core, outputs)
       ImGui.CloseCurrentPopup(ctx)
       dofile(core.script_path .. "reatc_regions_to_ltc.lua")
     end
-    ImGui.SameLine(ctx)
-    ImGui.TextColored(ctx, C.dim, "Create LTC audio items for all project regions")
+    ImGui.PushStyleColor(ctx, ImGui.Col_Text, C.dim)
+    ImGui.TextWrapped(ctx, "Create LTC audio items for all project regions")
+    ImGui.PopStyleColor(ctx)
 
     ImGui.Spacing(ctx)
     ImGui.TextColored(ctx, C.dim, "v" .. core.VERSION)
@@ -336,6 +426,9 @@ return function(core, outputs)
     push_style()
     ImGui.SetNextWindowSizeConstraints(ctx, 300, 180, 1e9, 1e9)
     local visible, open = ImGui.Begin(ctx, 'ReaTC v' .. core.VERSION, true)
+    -- ReaImGui: End() must only be called when Begin() returned visible=true.
+    -- When the window is collapsed, visible=false and Begin did not push a
+    -- frame; calling End() then trips "End() too many times".
     if visible then
       local win_w = ImGui.GetWindowWidth(ctx)
       ui_scale = math.max(0.6, math.min(2.0, win_w / 480))
@@ -345,13 +438,18 @@ return function(core, outputs)
         draw_main()
 
         -- Settings popup modal (fixed size, centered)
-        ImGui.SetNextWindowSizeConstraints(ctx, 420, 300, 600, 1200)
+        ImGui.SetNextWindowSizeConstraints(ctx, 460, 340, 800, 1200)
         local modal_visible, modal_open = ImGui.BeginPopupModal(ctx, 'Settings##popup', true)
         if modal_visible then
           if not modal_open then
             ImGui.CloseCurrentPopup(ctx)
           end
-          draw_settings()
+          -- Isolate draw_settings errors so EndPopup is always called,
+          -- otherwise the popup frame stays on ReaImGui's stack.
+          local ok, settings_err = pcall(draw_settings)
+          if not ok then
+            ImGui.TextColored(ctx, C.red, "Settings error: " .. tostring(settings_err))
+          end
           ImGui.EndPopup(ctx)
         end
       end)
@@ -359,8 +457,8 @@ return function(core, outputs)
         ImGui.TextColored(ctx, 0xFF0000FF, "Error: " .. tostring(err))
       end
       ImGui.PopFont(ctx)
+      ImGui.End(ctx)
     end
-    ImGui.End(ctx)
     ImGui.PopStyleColor(ctx, 18)
     ImGui.PopStyleVar(ctx, 2)
     return open

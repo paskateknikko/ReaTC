@@ -6,7 +6,12 @@
 # Persistent process that reads timecode from stdin and sends OSC packets.
 # Packet built with raw struct — no external library required.
 #
-# Usage: python3 reatc_osc.py <dest_ip> <port> <osc_address>
+# Usage:
+#   python3 reatc_osc.py <dest_ip> <port> <osc_address> [--src-ip IP]
+#
+# `--src-ip` binds the sending socket to that local IPv4 address. Without it,
+# the OS default route is used. Set this if you have multiple interfaces and
+# the packet needs to leave via a specific one.
 #
 # Stdin protocol (one line per packet, space-separated integers):
 #   <hours> <mins> <secs> <frames> <tc_type>
@@ -34,9 +39,10 @@ from __future__ import annotations
 
 __version__ = "{{VERSION}}"
 
-import sys
+import argparse
 import socket
 import struct
+import sys
 
 
 def osc_string(s: str) -> bytes:
@@ -70,19 +76,29 @@ def build_osc_timecode(address: str, hours: int, mins: int, secs: int, frames: i
 
 def main() -> None:
     """Entry point: read timecode lines from stdin and send OSC UDP packets."""
-    if len(sys.argv) < 4:
-        print("Usage: reatc_osc.py <dest_ip> <port> <osc_address>", file=sys.stderr)
-        sys.exit(1)
+    parser = argparse.ArgumentParser(prog="reatc_osc.py", add_help=True)
+    parser.add_argument("dest_ip")
+    parser.add_argument("port", type=int)
+    parser.add_argument("osc_address")
+    parser.add_argument("--src-ip", dest="src_ip", default=None,
+                        help="Bind send socket to this local IPv4 address")
+    args = parser.parse_args()
 
-    dest_ip     = sys.argv[1]
-    port        = int(sys.argv[2])
-    osc_address = sys.argv[3]
-
-    # Create socket once at startup (avoid per-packet overhead)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+    if args.src_ip:
+        try:
+            sock.bind((args.src_ip, 0))
+            print(f"osc: bound to source {args.src_ip}", file=sys.stderr)
+        except OSError as e:
+            print(f"osc: bind to {args.src_ip} failed: {e} (continuing unbound)",
+                  file=sys.stderr)
+
+    print(f"osc: sending to {args.dest_ip}:{args.port} {args.osc_address}",
+          file=sys.stderr)
 
     try:
-        # Read lines from stdin until EOF
         for line in sys.stdin:
             line = line.strip()
             if not line:
@@ -106,8 +122,8 @@ def main() -> None:
                     print(f"osc: TC out of range: {line!r}", file=sys.stderr)
                     continue
 
-                packet = build_osc_timecode(osc_address, hours, mins, secs, frames, tc_type)
-                sock.sendto(packet, (dest_ip, port))
+                packet = build_osc_timecode(args.osc_address, hours, mins, secs, frames, tc_type)
+                sock.sendto(packet, (args.dest_ip, args.port))
 
             except (ValueError, IndexError):
                 print(f"osc: parse error: {line!r}", file=sys.stderr)

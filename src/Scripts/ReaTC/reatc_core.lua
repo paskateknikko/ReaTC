@@ -44,8 +44,9 @@ do
   M.script_path = info.source:match("@(.+[\\/])") or ""
 end
 
-M.py_artnet = M.script_path .. "reatc_artnet.py"
-M.py_osc    = M.script_path .. "reatc_osc.py"
+M.py_artnet       = M.script_path .. "reatc_artnet.py"
+M.py_osc          = M.script_path .. "reatc_osc.py"
+M.py_netdiscover  = M.script_path .. "reatc_netdiscover.py"
 
 M.is_win = reaper.GetOS():find("Win") ~= nil
 M.dev_null = M.is_win and "2>NUL" or "2>/dev/null"
@@ -81,23 +82,30 @@ M.state = {
   python_error = nil,
 
   -- Art-Net
-  artnet_enabled   = false,
-  artnet_proc      = nil,
-  dest_ip          = "2.0.0.1",
-  framerate_type   = M.FR_EBU,
-  packets_sent     = 0,
-  artnet_error     = nil,
-  last_artnet_time = 0,
+  artnet_enabled        = false,
+  artnet_proc           = nil,
+  dest_ip               = "2.0.0.1",
+  artnet_preferred_ip   = "",  -- CIDR (e.g. "10.0.0.0/8") or "" = auto
+  artnet_preferred_iface = "",  -- explicit NIC name override, "" = none
+  framerate_type        = M.FR_EBU,
+  packets_sent          = 0,
+  artnet_error          = nil,
+  last_artnet_time      = 0,
 
   -- OSC
-  osc_enabled      = false,
-  osc_ip           = "127.0.0.1",
-  osc_port         = 9000,
-  osc_address      = "/tc",
-  osc_proc         = nil,
-  osc_error        = nil,
-  last_osc_time    = 0,
-  osc_packets_sent = 0,
+  osc_enabled          = false,
+  osc_ip               = "127.0.0.1",
+  osc_port             = 9000,
+  osc_address          = "/tc",
+  osc_preferred_ip     = "",
+  osc_preferred_iface  = "",
+  osc_proc             = nil,
+  osc_error            = nil,
+  last_osc_time        = 0,
+  osc_packets_sent     = 0,
+
+  -- Network interface discovery (populated lazily by list_interfaces())
+  interfaces       = nil,  -- array of { ip, iface, broadcast, netmask }
 
   -- Active TC (read from gmem, written by JSFX)
   tc_h = 0, tc_m = 0, tc_s = 0, tc_f = 0,
@@ -192,6 +200,127 @@ function M.is_valid_ipv4(ip)
   return #octets == 4
 end
 
+--- Validate a comma-separated list of IPv4 addresses (for multi-unicast).
+-- Whitespace around commas is allowed. An empty list is invalid.
+-- @param list string e.g. "192.168.0.50, 192.168.0.51"
+-- @return boolean true if every item is a valid IPv4
+function M.is_valid_ipv4_list(list)
+  if not list or type(list) ~= "string" then return false end
+  local count = 0
+  for item in list:gmatch("[^,]+") do
+    local trimmed = item:gsub("^%s+", ""):gsub("%s+$", "")
+    if not M.is_valid_ipv4(trimmed) then return false end
+    count = count + 1
+  end
+  return count > 0
+end
+
+--- List local IPv4 interfaces by invoking reatc_netdiscover.py.
+-- Output is tab-separated (iface names can contain spaces: "Wi-Fi 2").
+-- Caches the result in `state.interfaces`. Pass `force = true` to refresh.
+-- @param force boolean re-run discovery even if cached
+-- @return table array of { ip, iface, broadcast, netmask } (possibly empty)
+function M.list_interfaces(force)
+  local s = M.state
+  if s.interfaces and not force then return s.interfaces end
+  s.interfaces = {}
+  if not s.python_bin then return s.interfaces end
+
+  local q = M.is_win and ('"' .. s.python_bin .. '"') or s.python_bin
+  local cmd = q .. ' "' .. M.py_netdiscover .. '" ' .. M.dev_null
+  local h = io.popen(cmd, "r")
+  if not h then return s.interfaces end
+  local out = h:read("*a") or ""
+  h:close()
+
+  for line in out:gmatch("[^\r\n]+") do
+    local ip, iface, bcast, mask = line:match("^([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)$")
+    if ip and M.is_valid_ipv4(ip) then
+      s.interfaces[#s.interfaces + 1] = {
+        ip = ip,
+        iface = iface,
+        broadcast = (bcast ~= "-") and bcast or nil,
+        netmask = mask,
+      }
+    end
+  end
+  return s.interfaces
+end
+
+--- Convert a dotted-quad IPv4 to a 32-bit integer, or nil on invalid input.
+local function ipv4_to_int(ip)
+  if not M.is_valid_ipv4(ip) then return nil end
+  local a, b, c, d = ip:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+  return ((tonumber(a) << 24) | (tonumber(b) << 16)
+        | (tonumber(c) << 8)  | tonumber(d)) & 0xFFFFFFFF
+end
+
+--- Validate a CIDR notation string or bare IPv4 (treated as /32).
+-- @param s string e.g. "10.0.0.0/8" or "192.168.1.100"
+-- @return boolean true if the input parses as a valid IPv4 network
+function M.is_valid_cidr(s)
+  if not s or type(s) ~= "string" or s == "" then return false end
+  local net, prefix_str = s:match("^([%d.]+)/(%d+)$")
+  if not net then
+    return M.is_valid_ipv4(s)
+  end
+  local prefix = tonumber(prefix_str)
+  if not prefix or prefix < 0 or prefix > 32 then return false end
+  return M.is_valid_ipv4(net)
+end
+
+--- Test whether an IPv4 falls inside a CIDR range.
+-- A bare IP (no /prefix) is treated as /32 — only an exact match succeeds.
+-- @param ip string dotted-quad IPv4
+-- @param cidr string "network/prefix" or bare IPv4
+-- @return boolean true if ip is in the CIDR range
+function M.cidr_match(ip, cidr)
+  if not (ip and cidr) then return false end
+  local net, prefix_str = cidr:match("^([%d.]+)/(%d+)$")
+  local prefix
+  if net then
+    prefix = tonumber(prefix_str)
+  else
+    net = cidr
+    prefix = 32
+  end
+  if not (prefix and prefix >= 0 and prefix <= 32) then return false end
+  local net_int = ipv4_to_int(net)
+  local ip_int  = ipv4_to_int(ip)
+  if not (net_int and ip_int) then return false end
+  if prefix == 0 then return true end
+  local mask = (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF
+  return (net_int & mask) == (ip_int & mask)
+end
+
+--- Resolve a preferred-IP / preferred-interface pair to a concrete bind IP.
+-- Resolution order: explicit interface override → CIDR match → none (Auto).
+-- @param preferred_ip string CIDR or IP (or "" for none)
+-- @param preferred_iface string interface name (or "" for none)
+-- @return string|nil resolved IPv4 to bind to, or nil for Auto/default route
+-- @return string|nil human-readable "iface (ip)" label, or nil for Auto
+function M.resolve_bind_ip(preferred_ip, preferred_iface)
+  local ifaces = M.list_interfaces()
+
+  if preferred_iface and preferred_iface ~= "" then
+    for _, it in ipairs(ifaces) do
+      if it.iface == preferred_iface then
+        return it.ip, string.format("%s (%s)", it.iface, it.ip)
+      end
+    end
+  end
+
+  if preferred_ip and preferred_ip ~= "" then
+    for _, it in ipairs(ifaces) do
+      if M.cidr_match(it.ip, preferred_ip) then
+        return it.ip, string.format("%s (%s)", it.iface, it.ip)
+      end
+    end
+  end
+
+  return nil, nil
+end
+
 --- Convert a time position in seconds to HH:MM:SS:FF timecode.
 -- Uses integer math for drop-frame (29.97fps) to avoid float drift.
 -- @param pos number time position in seconds (clamped to >= 0)
@@ -223,17 +352,21 @@ end
 
 -- Settings key constants
 local SK = {
-  DEST_IP           = "dest_ip",
-  ARTNET_ENABLED    = "artnet_enabled",
-  OSC_ENABLED       = "osc_enabled",
-  OSC_IP            = "osc_ip",
-  OSC_PORT          = "osc_port",
-  OSC_ADDRESS       = "osc_address",
-  TC_OFFSET_H       = "tc_offset_h",
-  TC_OFFSET_M       = "tc_offset_m",
-  TC_OFFSET_S       = "tc_offset_s",
-  TC_OFFSET_F       = "tc_offset_f",
-  TC_OFFSET_NEGATIVE = "tc_offset_negative",
+  DEST_IP                = "dest_ip",
+  ARTNET_ENABLED         = "artnet_enabled",
+  ARTNET_PREFERRED_IP    = "artnet_preferred_ip",
+  ARTNET_PREFERRED_IFACE = "artnet_preferred_iface",
+  OSC_ENABLED            = "osc_enabled",
+  OSC_IP                 = "osc_ip",
+  OSC_PORT               = "osc_port",
+  OSC_ADDRESS            = "osc_address",
+  OSC_PREFERRED_IP       = "osc_preferred_ip",
+  OSC_PREFERRED_IFACE    = "osc_preferred_iface",
+  TC_OFFSET_H            = "tc_offset_h",
+  TC_OFFSET_M            = "tc_offset_m",
+  TC_OFFSET_S            = "tc_offset_s",
+  TC_OFFSET_F            = "tc_offset_f",
+  TC_OFFSET_NEGATIVE     = "tc_offset_negative",
 }
 
 --- Load all settings from REAPER ExtState and apply to `state`.
@@ -245,13 +378,21 @@ function M.load_settings()
   end
   local s = M.state
   local loaded_ip = gets(SK.DEST_IP)
-  s.dest_ip = (loaded_ip and M.is_valid_ipv4(loaded_ip)) and loaded_ip or s.dest_ip
+  s.dest_ip = (loaded_ip and M.is_valid_ipv4_list(loaded_ip)) and loaded_ip or s.dest_ip
   s.artnet_enabled  = gets(SK.ARTNET_ENABLED) == "true"
+  local loaded_artnet_cidr = gets(SK.ARTNET_PREFERRED_IP)
+  s.artnet_preferred_ip    = (loaded_artnet_cidr and M.is_valid_cidr(loaded_artnet_cidr))
+                             and loaded_artnet_cidr or ""
+  s.artnet_preferred_iface = gets(SK.ARTNET_PREFERRED_IFACE) or ""
   s.osc_enabled    = gets(SK.OSC_ENABLED) == "true"
   local loaded_osc_ip = gets(SK.OSC_IP)
   s.osc_ip         = (loaded_osc_ip and M.is_valid_ipv4(loaded_osc_ip)) and loaded_osc_ip or s.osc_ip
   s.osc_port       = tonumber(gets(SK.OSC_PORT)) or 9000
   s.osc_address    = gets(SK.OSC_ADDRESS) or "/tc"
+  local loaded_osc_cidr = gets(SK.OSC_PREFERRED_IP)
+  s.osc_preferred_ip     = (loaded_osc_cidr and M.is_valid_cidr(loaded_osc_cidr))
+                           and loaded_osc_cidr or ""
+  s.osc_preferred_iface  = gets(SK.OSC_PREFERRED_IFACE) or ""
   s.tc_offset_h        = tonumber(gets(SK.TC_OFFSET_H)) or 0
   s.tc_offset_m        = tonumber(gets(SK.TC_OFFSET_M)) or 0
   s.tc_offset_s        = tonumber(gets(SK.TC_OFFSET_S)) or 0
@@ -272,12 +413,16 @@ end
 function M.save_settings()
   local s = M.state
   local function sets(k, v) reaper.SetExtState(M.EXT_SECTION, k, tostring(v), true) end
-  sets(SK.DEST_IP,           s.dest_ip)
-  sets(SK.ARTNET_ENABLED,    s.artnet_enabled)
-  sets(SK.OSC_ENABLED,       s.osc_enabled)
-  sets(SK.OSC_IP,            s.osc_ip)
-  sets(SK.OSC_PORT,          s.osc_port)
-  sets(SK.OSC_ADDRESS,       s.osc_address)
+  sets(SK.DEST_IP,                s.dest_ip)
+  sets(SK.ARTNET_ENABLED,         s.artnet_enabled)
+  sets(SK.ARTNET_PREFERRED_IP,    s.artnet_preferred_ip)
+  sets(SK.ARTNET_PREFERRED_IFACE, s.artnet_preferred_iface)
+  sets(SK.OSC_ENABLED,            s.osc_enabled)
+  sets(SK.OSC_IP,                 s.osc_ip)
+  sets(SK.OSC_PORT,               s.osc_port)
+  sets(SK.OSC_ADDRESS,            s.osc_address)
+  sets(SK.OSC_PREFERRED_IP,       s.osc_preferred_ip)
+  sets(SK.OSC_PREFERRED_IFACE,    s.osc_preferred_iface)
   sets(SK.TC_OFFSET_H,       s.tc_offset_h)
   sets(SK.TC_OFFSET_M,       s.tc_offset_m)
   sets(SK.TC_OFFSET_S,       s.tc_offset_s)

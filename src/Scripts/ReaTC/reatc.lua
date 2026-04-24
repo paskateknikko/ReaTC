@@ -33,10 +33,29 @@
 -- ExtState toggle commands from the C++ extension, and sends network output.
 -- TC sources and outputs are configured in the ReaTC Timecode Converter JSFX.
 
-if not reaper.ImGui_GetBuiltinPath then
-  reaper.MB(
-    'ReaImGui not installed.\n\nInstall it from ReaPack (ReaTeam Extensions → ReaImGui).',
-    'ReaTC', 0)
+local function check_reaimgui()
+  if not reaper.ImGui_GetBuiltinPath then
+    return false
+  end
+  package.path = reaper.ImGui_GetBuiltinPath() .. '/?.lua;' .. package.path
+  local ok, mod = pcall(require, 'imgui')
+  if not ok then return false end
+  return pcall(mod, '0.10')
+end
+
+if not check_reaimgui() then
+  if reaper.ReaPack_BrowsePackages then
+    local choice = reaper.MB(
+      'ReaImGui 0.10 or newer is required.\n\nOpen ReaPack to install or update it now?',
+      'ReaTC', 4)
+    if choice == 6 then
+      reaper.ReaPack_BrowsePackages('cfillion ReaImGui')
+    end
+  else
+    reaper.MB(
+      'ReaImGui 0.10 or newer is required.\n\nInstall ReaPack first, then install "ReaImGui" from ReaTeam Extensions.',
+      'ReaTC', 0)
+  end
   return
 end
 

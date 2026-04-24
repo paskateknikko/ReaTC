@@ -34,8 +34,11 @@ return function(core)
       s.osc_error = "Python not found"; return false
     end
     local q = core.is_win and ('"' .. s.python_bin .. '"') or s.python_bin
+    local bind_ip = core.resolve_bind_ip(s.osc_preferred_ip, s.osc_preferred_iface)
+    local src = bind_ip and (' --src-ip "' .. bind_ip .. '"') or ""
     local cmd = q .. ' "' .. core.py_osc .. '" "' .. s.osc_ip .. '" '
-                .. s.osc_port .. ' "' .. s.osc_address .. '" ' .. core.dev_null
+                .. s.osc_port .. ' "' .. s.osc_address .. '"' .. src
+                .. ' ' .. core.dev_null
     s.osc_proc = io.popen(cmd, "w")
     if not s.osc_proc then
       s.osc_error = "Failed to start OSC daemon"; return false
@@ -109,7 +112,10 @@ return function(core)
       s.artnet_error = "Python not found"; return false
     end
     local q = core.is_win and ('"' .. s.python_bin .. '"') or s.python_bin
-    local cmd = q .. ' "' .. core.py_artnet .. '" "' .. s.dest_ip .. '" ' .. core.dev_null
+    local bind_ip = core.resolve_bind_ip(s.artnet_preferred_ip, s.artnet_preferred_iface)
+    local src = bind_ip and (' --src-ip "' .. bind_ip .. '"') or ""
+    local cmd = q .. ' "' .. core.py_artnet .. '" "' .. s.dest_ip .. '"' .. src
+                .. ' ' .. core.dev_null
     s.artnet_proc = io.popen(cmd, "w")
     if not s.artnet_proc then
       s.artnet_error = "Failed to start Art-Net daemon"; return false
