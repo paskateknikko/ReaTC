@@ -31,13 +31,26 @@ import sys
 ARTNET_PORT = 6454
 
 
-def build_packet(h: int, m: int, s: int, f: int, tc_type: int) -> bytes:
-    """Build a 19-byte Art-Net TimeCode packet."""
+def build_artnet_timecode(hours: int, mins: int, secs: int, frames: int,
+                          tc_type: int) -> bytes:
+    """Build a 19-byte Art-Net TimeCode packet.
+
+    Args:
+        hours: Hours component (0-39).
+        mins: Minutes component (0-59).
+        secs: Seconds component (0-59).
+        frames: Frame number (0-29).
+        tc_type: Timecode type (0=24fps, 1=25fps, 2=29.97DF, 3=30fps).
+
+    Returns:
+        19-byte Art-Net TimeCode UDP payload. Each TC field is masked to
+        one byte so out-of-range values cannot raise.
+    """
     return (
         b"Art-Net\x00"                     # ID (8)
         + struct.pack("<H", 0x9700)          # OpCode (2)
         + b"\x00\x0E\x00\x00"                # ProtVer 14 + filler (4)
-        + bytes((f, s, m, h, tc_type))       # Timecode (5)
+        + bytes(v & 0xFF for v in (frames, secs, mins, hours, tc_type))  # Timecode (5)
     )
 
 
@@ -64,7 +77,7 @@ def run(dest_ips: list[str], src_ip: str | None) -> None:
             if not (0 <= h <= 39 and 0 <= m <= 59 and 0 <= s <= 59
                     and 0 <= f <= 29 and 0 <= tc <= 3):
                 continue
-            pkt = build_packet(h, m, s, f, tc)
+            pkt = build_artnet_timecode(h, m, s, f, tc)
             for dest in dest_ips:
                 sock.sendto(pkt, (dest, ARTNET_PORT))
     finally:
@@ -72,6 +85,7 @@ def run(dest_ips: list[str], src_ip: str | None) -> None:
 
 
 def main() -> None:
+    """Entry point: parse arguments and run the Art-Net TimeCode daemon."""
     p = argparse.ArgumentParser(prog="reatc_artnet.py")
     p.add_argument("dest_ip",
                    help="Destination IP, or comma-separated list")

@@ -20,6 +20,10 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 - **Art-Net multi-unicast** — Art-Net "Destination IP" now accepts a comma-separated list (e.g. `192.168.0.50, 192.168.0.51`) and sends the same TimeCode packet to each target
 - **`reatc_netdiscover.py`** — locale-independent IPv4 interface enumeration daemon; on Windows uses `iphlpapi.GetAdaptersAddresses` via ctypes (works regardless of system language), parses `ifconfig` on macOS
 
+### Fixed
+
+- **Art-Net packet builder** — restored `build_artnet_timecode()` (renamed in the multi-unicast refactor, which broke the test suite) and its per-field byte masking, so out-of-range values can no longer raise inside the daemon
+
 ## [1.2.1] - 2026-04-04
 
 ### Changed
