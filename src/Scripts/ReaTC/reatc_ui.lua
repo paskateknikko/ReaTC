@@ -259,8 +259,9 @@ return function(core, outputs)
         "(e.g. 192.168.0.50, 192.168.0.51).")
     end
 
-    ImGui.SetNextItemWidth(ctx, 100)
-    local sid_changed, new_sid = ImGui.InputInt(ctx, 'Stream ID##artnet', s.artnet_stream_id)
+    ImGui.SetNextItemWidth(ctx, 80)
+    -- step = 0 hides the +/- buttons (plain numeric field, like OSC Port)
+    local sid_changed, new_sid = ImGui.InputInt(ctx, 'Stream ID##artnet', s.artnet_stream_id, 0, 0)
     if sid_changed then
       new_sid = math.max(0, math.min(255, new_sid))
       if new_sid ~= s.artnet_stream_id then
