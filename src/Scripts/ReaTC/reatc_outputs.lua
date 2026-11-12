@@ -18,11 +18,18 @@ return function(core)
   local MAX_RETRIES = 3
   local RETRY_BACKOFF = { 0.5, 1.0, 2.0 }  -- seconds between retries
 
+  -- Settings edits (IP, port, stream ID, interface) restart the daemon only
+  -- after this many seconds without further changes, so typing an address
+  -- does not spawn a new process on every keystroke.
+  local RESTART_DEBOUNCE = 0.75
+
   -- Per-daemon retry state
   s.osc_retries    = 0
   s.osc_retry_at   = 0
   s.artnet_retries = 0
   s.artnet_retry_at = 0
+  s.osc_restart_at    = nil
+  s.artnet_restart_at = nil
 
   -- ── OSC daemon ───────────────────────────────────────────────────────────
 
@@ -33,13 +40,13 @@ return function(core)
     if not s.python_bin then
       s.osc_error = "Python not found"; return false
     end
-    local q = core.is_win and ('"' .. s.python_bin .. '"') or s.python_bin
+    local q = core.quote_bin(s.python_bin)
     local bind_ip = core.resolve_bind_ip(s.osc_preferred_ip, s.osc_preferred_iface)
     local src = bind_ip and (' --src-ip "' .. bind_ip .. '"') or ""
     local cmd = q .. ' "' .. core.py_osc .. '" "' .. s.osc_ip .. '" '
                 .. s.osc_port .. ' "' .. s.osc_address .. '"' .. src
                 .. ' ' .. core.dev_null
-    s.osc_proc = io.popen(cmd, "w")
+    s.osc_proc = io.popen(core.shell_cmd(cmd), "w")
     if not s.osc_proc then
       s.osc_error = "Failed to start OSC daemon"; return false
     end
@@ -54,11 +61,20 @@ return function(core)
       pcall(function() s.osc_proc:close() end)
       s.osc_proc = nil
     end
+    s.osc_restart_at = nil
+  end
+
+  --- Restart the OSC daemon with new settings once edits settle (debounced).
+  function M.request_osc_restart()
+    if s.osc_proc then s.osc_restart_at = reaper.time_precise() + RESTART_DEBOUNCE end
   end
 
   --- Send current TC to the OSC daemon (throttled, with retry on failure).
   function M.send_osc()
     if not s.osc_enabled or not s.python_bin then return end
+    if s.osc_restart_at and reaper.time_precise() >= s.osc_restart_at then
+      M.stop_osc_daemon()
+    end
     if not s.tc_valid then return end
 
     -- Throttle to match framerate
@@ -111,13 +127,13 @@ return function(core)
     if not s.python_bin then
       s.artnet_error = "Python not found"; return false
     end
-    local q = core.is_win and ('"' .. s.python_bin .. '"') or s.python_bin
+    local q = core.quote_bin(s.python_bin)
     local bind_ip = core.resolve_bind_ip(s.artnet_preferred_ip, s.artnet_preferred_iface)
     local src = bind_ip and (' --src-ip "' .. bind_ip .. '"') or ""
     local cmd = q .. ' "' .. core.py_artnet .. '" "' .. s.dest_ip .. '"' .. src
                 .. ' --stream-id ' .. math.floor(s.artnet_stream_id)
                 .. ' ' .. core.dev_null
-    s.artnet_proc = io.popen(cmd, "w")
+    s.artnet_proc = io.popen(core.shell_cmd(cmd), "w")
     if not s.artnet_proc then
       s.artnet_error = "Failed to start Art-Net daemon"; return false
     end
@@ -132,11 +148,20 @@ return function(core)
       pcall(function() s.artnet_proc:close() end)
       s.artnet_proc = nil
     end
+    s.artnet_restart_at = nil
+  end
+
+  --- Restart the Art-Net daemon with new settings once edits settle (debounced).
+  function M.request_artnet_restart()
+    if s.artnet_proc then s.artnet_restart_at = reaper.time_precise() + RESTART_DEBOUNCE end
   end
 
   --- Send current TC to the Art-Net daemon (throttled, with retry on failure).
   function M.send_artnet()
     if not s.artnet_enabled or not s.python_bin then return end
+    if s.artnet_restart_at and reaper.time_precise() >= s.artnet_restart_at then
+      M.stop_artnet_daemon()
+    end
     if not s.tc_valid then return end
 
     -- Throttle to match framerate

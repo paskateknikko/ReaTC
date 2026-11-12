@@ -74,6 +74,17 @@ return function(core, outputs)
   -- @param pref_ip string current CIDR ("" = none)
   -- @param pref_iface string current interface override ("" = Auto)
   -- @param on_change function(new_ip, new_iface) called on any change
+  --- Show an orange wrapped warning if a destination is a fake broadcast
+  -- address (e.g. x.y.z.255 on a /8 network). See core.broadcast_warning.
+  local function broadcast_hint(dest, pref_ip, pref_iface)
+    local warn = core.broadcast_warning(dest, pref_ip, pref_iface)
+    if warn then
+      ImGui.PushStyleColor(ctx, ImGui.Col_Text, C.orange)
+      ImGui.TextWrapped(ctx, warn)
+      ImGui.PopStyleColor(ctx)
+    end
+  end
+
   local function preferred_ip_block(id, pref_ip, pref_iface, on_change)
     ImGui.SetNextItemWidth(ctx, 180)
     local ip_changed, new_ip = ImGui.InputText(ctx, 'Preferred IP##' .. id, pref_ip)
@@ -245,9 +256,7 @@ return function(core, outputs)
       if core.is_valid_ipv4_list(new_ip) then
         s.dest_ip = new_ip
         core.save_settings()
-        if s.artnet_enabled then
-          outputs.stop_artnet_daemon()
-        end
+        if s.artnet_enabled then outputs.request_artnet_restart() end
       elseif new_ip ~= "" then
         ImGui.TextColored(ctx, C.red, "Invalid: use aaa.bbb.ccc.ddd, comma-separated for multi-unicast")
       end
@@ -258,6 +267,7 @@ return function(core, outputs)
         "or a comma-separated list for multi-unicast\n" ..
         "(e.g. 192.168.0.50, 192.168.0.51).")
     end
+    broadcast_hint(s.dest_ip, s.artnet_preferred_ip, s.artnet_preferred_iface)
 
     ImGui.SetNextItemWidth(ctx, 80)
     -- step = 0 hides the +/- buttons (plain numeric field, like OSC Port)
@@ -267,7 +277,7 @@ return function(core, outputs)
       if new_sid ~= s.artnet_stream_id then
         s.artnet_stream_id = new_sid
         core.save_settings()
-        if s.artnet_enabled then outputs.stop_artnet_daemon() end
+        if s.artnet_enabled then outputs.request_artnet_restart() end
       end
     end
     if ImGui.IsItemHovered(ctx) then
@@ -285,7 +295,7 @@ return function(core, outputs)
           s.artnet_preferred_ip    = new_ip
           s.artnet_preferred_iface = new_iface
           core.save_settings()
-          if s.artnet_enabled then outputs.stop_artnet_daemon() end
+          if s.artnet_enabled then outputs.request_artnet_restart() end
         end
       end)
 
@@ -322,11 +332,12 @@ return function(core, outputs)
       if core.is_valid_ipv4(new_osc_ip) then
         s.osc_ip = new_osc_ip
         core.save_settings()
-        if s.osc_enabled then outputs.stop_osc_daemon() end
+        if s.osc_enabled then outputs.request_osc_restart() end
       elseif new_osc_ip ~= "" then
         ImGui.TextColored(ctx, C.red, "Invalid IP: must be aaa.bbb.ccc.ddd (0-255 each)")
       end
     end
+    broadcast_hint(s.osc_ip, s.osc_preferred_ip, s.osc_preferred_iface)
 
     ImGui.SetNextItemWidth(ctx, 80)
     local osc_port_str = tostring(s.osc_port)
@@ -337,7 +348,7 @@ return function(core, outputs)
       if p and p >= 1 and p <= 65535 then
         s.osc_port = math.floor(p)
         core.save_settings()
-        if s.osc_enabled then outputs.stop_osc_daemon() end
+        if s.osc_enabled then outputs.request_osc_restart() end
       end
     end
 
@@ -347,7 +358,7 @@ return function(core, outputs)
       if new_osc_addr:sub(1, 1) == "/" then
         s.osc_address = new_osc_addr
         core.save_settings()
-        if s.osc_enabled then outputs.stop_osc_daemon() end
+        if s.osc_enabled then outputs.request_osc_restart() end
       elseif new_osc_addr ~= "" then
         ImGui.TextColored(ctx, C.red, "OSC address must start with /")
       end
@@ -361,7 +372,7 @@ return function(core, outputs)
           s.osc_preferred_ip    = new_ip
           s.osc_preferred_iface = new_iface
           core.save_settings()
-          if s.osc_enabled then outputs.stop_osc_daemon() end
+          if s.osc_enabled then outputs.request_osc_restart() end
         end
       end)
 

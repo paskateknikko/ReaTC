@@ -24,12 +24,17 @@ M.FR_NAMES = { "24fps (Film)", "25fps (EBU)", "29.97DF", "30fps (SMPTE)" }
 M.FPS_VAL  = { 24, 25, 29.97, 30 }  -- index 1..4
 M.FPS_INT  = { 24, 25, 30,    30 }  -- integer frame count
 
-M.PYTHON_CANDIDATES = {
+M.PYTHON_CANDIDATES_UNIX = {
   "python3", "python",
   "/usr/bin/python3",
   "/usr/local/bin/python3",
   "/opt/homebrew/bin/python3",  -- macOS ARM (Homebrew)
-  "py",                         -- Windows Python Launcher (recommended)
+}
+
+-- Windows: "python3" is usually the Microsoft Store alias stub (prints
+-- "Python was not found"), so it is tried last. "py" is the Python Launcher.
+M.PYTHON_CANDIDATES_WIN = {
+  "python", "py", "python3",
   "C:\\Python313\\python.exe",
   "C:\\Python312\\python.exe",
   "C:\\Python311\\python.exe",
@@ -50,6 +55,49 @@ M.py_netdiscover  = M.script_path .. "reatc_netdiscover.py"
 
 M.is_win = reaper.GetOS():find("Win") ~= nil
 M.dev_null = M.is_win and "2>NUL" or "2>/dev/null"
+M.PYTHON_CANDIDATES = M.is_win and M.PYTHON_CANDIDATES_WIN or M.PYTHON_CANDIDATES_UNIX
+
+--- Quote a program path for a command line.
+-- On Windows only paths containing spaces are quoted: bare names like
+-- "python" must stay unquoted so PATH lookup works in every launcher.
+-- @param bin string program name or path
+-- @return string
+function M.quote_bin(bin)
+  if M.is_win and not bin:find(" ", 1, true) then return bin end
+  return '"' .. bin .. '"'
+end
+
+--- Prepare a command line for io.popen / os.execute.
+-- On Windows these run `cmd.exe /c <cmd>`, and cmd strips the first and last
+-- quote of the line when it contains more than two quotes, which breaks
+-- `"python" "script.py" "arg"`. Wrapping the whole line in an extra pair of
+-- quotes makes cmd strip those instead.
+-- @param cmd string
+-- @return string
+function M.shell_cmd(cmd)
+  return M.is_win and ('"' .. cmd .. '"') or cmd
+end
+
+--- Run a short command and capture its stdout.
+-- Windows uses reaper.ExecProcess (no cmd.exe, no console window, ~50 ms);
+-- other platforms use io.popen with stderr discarded.
+-- @param cmd string command line (no shell redirections)
+-- @param timeout_ms number|nil Windows timeout (default 5000)
+-- @return string|nil stdout, or nil if the process failed
+function M.exec_capture(cmd, timeout_ms)
+  if M.is_win then
+    local res = reaper.ExecProcess(cmd, timeout_ms or 5000)
+    if not res then return nil end
+    local code, out = res:match("^(%-?%d+)\r?\n(.*)$")
+    if code ~= "0" then return nil end
+    return out
+  end
+  local h = io.popen(cmd .. " " .. M.dev_null, "r")
+  if not h then return nil end
+  local out = h:read("*a")
+  h:close()
+  return out
+end
 
 -- Source IDs (matching JSFX active_source values)
 M.SRC_NONE     = 0
@@ -165,12 +213,14 @@ M.state = {
 -- @return string|nil Python binary path, or nil if not found
 function M.find_python()
   for _, cmd in ipairs(M.PYTHON_CANDIDATES) do
-    local quoted = M.is_win and ('"' .. cmd .. '"') or cmd
-    local h = io.popen(quoted .. ' --version 2>&1')
-    if h then
-      local out = h:read("*a"); h:close()
-      if out and out:match("Python 3") then return cmd end
+    local out
+    if M.is_win then
+      out = M.exec_capture(M.quote_bin(cmd) .. " --version", 3000)
+    else
+      local h = io.popen(cmd .. ' --version 2>&1')
+      if h then out = h:read("*a"); h:close() end
     end
+    if out and out:match("Python 3") then return cmd end
   end
   return nil
 end
@@ -255,12 +305,7 @@ function M.list_interfaces(force)
   s.interfaces = {}
   if not s.python_bin then return s.interfaces end
 
-  local q = M.is_win and ('"' .. s.python_bin .. '"') or s.python_bin
-  local cmd = q .. ' "' .. M.py_netdiscover .. '" ' .. M.dev_null
-  local h = io.popen(cmd, "r")
-  if not h then return s.interfaces end
-  local out = h:read("*a") or ""
-  h:close()
+  local out = M.exec_capture(M.quote_bin(s.python_bin) .. ' "' .. M.py_netdiscover .. '"') or ""
 
   for line in out:gmatch("[^\r\n]+") do
     local ip, iface, bcast, mask = line:match("^([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)$")
@@ -348,6 +393,43 @@ function M.resolve_bind_ip(preferred_ip, preferred_iface)
   end
 
   return nil, nil
+end
+
+--- Warn when a destination looks like a broadcast address but is not one.
+-- "x.y.z.255" is only a broadcast on a /24. On e.g. a /8 it is an ordinary
+-- host address: the OS ARPs for it, nothing answers, and packets are dropped.
+-- The destination is judged against the bound interface (Preferred IP /
+-- Interface) or, when Auto, against any local interface whose subnet holds it.
+-- @param dest_list string single IPv4 or comma-separated list
+-- @param preferred_ip string CIDR or IP (or "")
+-- @param preferred_iface string interface name (or "")
+-- @return string|nil warning text, or nil when every destination looks fine
+function M.broadcast_warning(dest_list, preferred_ip, preferred_iface)
+  if not dest_list or dest_list == "" then return nil end
+  local ifaces = M.list_interfaces()
+  local bound_ip = M.resolve_bind_ip(preferred_ip, preferred_iface)
+
+  for item in dest_list:gmatch("[^,]+") do
+    local dest = item:gsub("^%s+", ""):gsub("%s+$", "")
+    local d = ipv4_to_int(dest)
+    if d and (d & 0xFF) == 0xFF and dest ~= "255.255.255.255" then
+      for _, it in ipairs(ifaces) do
+        local ip, mask = ipv4_to_int(it.ip), ipv4_to_int(it.netmask)
+        local relevant = (bound_ip == nil) or (it.ip == bound_ip)
+        if relevant and ip and mask and (ip & mask) == (d & mask) then
+          if dest ~= it.broadcast then
+            return string.format(
+              "%s is not a broadcast address on %s (%s, mask %s) and will not be delivered. "
+              .. "Use the device IP%s.",
+              dest, it.iface, it.ip, it.netmask,
+              it.broadcast and (" or broadcast " .. it.broadcast) or "")
+          end
+          break
+        end
+      end
+    end
+  end
+  return nil
 end
 
 --- Exchange region timeline state with the JSFX via gmem.
