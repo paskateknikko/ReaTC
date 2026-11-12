@@ -449,26 +449,13 @@ function advance_tc_frame() local(fps_i) (
   );
 );
 
-function tc_from_seconds_qf(pos) local(total, ts, fps_i, d, mm, tf) (
-  pos = max(0, pos);
-  fps_i = (qf_fps_t == 0) ? 24 : (qf_fps_t == 1) ? 25 : 30;
-  qf_fps_t == 2 ? (
-    total = floor(pos * 30.0);
-    d     = floor(total / 17982);
-    mm    = total % 17982;
-    tf    = total + 18*d + 2*max(0, floor((mm - 2) / 1798));
-    qf_tc_h = floor(tf / 108000) % 24;
-    qf_tc_m = floor(tf / 1800)   % 60;
-    qf_tc_s = floor(tf / 30)     % 60;
-    qf_tc_f = tf % 30;
+// Active output TC (after offset) -> seconds, same time base as tc_to_seconds_qf
+function out_to_seconds() local(mt) (
+  fps_type == 2 ? (
+    mt = out_h * 60 + out_m;
+    (out_h * 108000 + out_m * 1800 + out_s * 30 + out_f - 2 * (mt - floor(mt / 10))) / 29.97;
   ) : (
-    total   = floor(pos * fps_i);
-    qf_tc_f = total % fps_i;
-    ts      = floor(total / fps_i);
-    qf_tc_s = ts % 60;
-    ts      = floor(ts / 60);
-    qf_tc_m = ts % 60;
-    qf_tc_h = floor(ts / 60) % 24;
+    (((out_h * 60 + out_m) * 60 + out_s) * fps_int + out_f) / fps_real;
   );
 );
 
@@ -945,10 +932,10 @@ slider8 > 0.5 && out_valid ? (
     // ERR frames in MTC receivers).
     qf_piece == 0 ? (
       mtc_expected = tc_to_seconds_qf();
-      // Use active TC position for drift reference
+      // Use active output TC (after offset) as drift reference
       active_source == SRC_TIMELINE ? (
-        abs(play_position - mtc_expected) > (2.0 / fps_real) ? (
-          tc_from_seconds_qf(play_position);
+        abs(out_to_seconds() - mtc_expected) > (2.0 / fps_real) ? (
+          qf_tc_h = out_h; qf_tc_m = out_m; qf_tc_s = out_s; qf_tc_f = out_f;
           qf_samples_to_next = 0;
         );
       );
