@@ -168,8 +168,12 @@ return function(core, outputs)
       sl       = "MTC Locked   " .. core.FR_NAMES[s.framerate_type + 1]
       sl_color = C.blue
     elseif source == "Timeline" then
-      local label = s.region_mode
-        and string.format("Region %d", s.region_current) or "Timeline"
+      local label = "Timeline"
+      if s.region_mode then
+        local rname = s.region_names[s.region_current] or ""
+        label = string.format("Region %d", s.region_current)
+          .. (rname ~= "" and (" \u{2014} " .. rname) or "")
+      end
       sl       = label .. "   " .. core.FR_NAMES[s.framerate_type + 1]
       sl_color = (s.artnet_enabled or s.osc_enabled) and C.green or C.dim
     else

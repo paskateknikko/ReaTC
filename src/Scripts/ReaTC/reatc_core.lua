@@ -84,6 +84,10 @@ M.GMEM_RGN_COUNT       = 36
 M.GMEM_RGN_CURRENT     = 37
 M.GMEM_RGN_LIST        = 100  -- 3 cells per region: start, end, number
 M.RGN_MAX              = 1000 -- must match RGN_MAX in reatc_tc.jsfx
+M.GMEM_RGN_NAME_NUM    = 38   -- region number the published name belongs to
+M.GMEM_RGN_NAME_LEN    = 39
+M.GMEM_RGN_NAME        = 3200 -- one UTF-8 byte per cell
+M.RGN_NAME_MAX         = 64   -- must match RGN_NAME_MAX in reatc_tc.jsfx
 
 -- State
 M.state = {
@@ -144,6 +148,8 @@ M.state = {
   region_start_f        = 0,
   region_count          = 0,      -- regions currently published to gmem
   region_current        = 0,      -- region number at play position (from JSFX)
+  region_names          = {},     -- region number -> name (from last sync)
+  region_name_sent      = nil,    -- "num\0name" last published to gmem
   region_sync_state     = nil,    -- last project state change count synced
   region_sync_proj      = nil,    -- last project synced
 
@@ -374,11 +380,15 @@ function M.sync_regions_to_gmem(force)
   s.region_sync_proj, s.region_sync_state = proj, change
 
   local regions = {}
+  local names = {}
   local i = 0
   while true do
-    local ret, isrgn, pos, rgnend, _, num = reaper.EnumProjectMarkers3(proj, i)
+    local ret, isrgn, pos, rgnend, name, num = reaper.EnumProjectMarkers3(proj, i)
     if ret == 0 then break end
-    if isrgn then regions[#regions + 1] = { pos, rgnend, num } end
+    if isrgn then
+      regions[#regions + 1] = { pos, rgnend, num }
+      names[num] = name
+    end
     i = i + 1
   end
   table.sort(regions, function(a, b) return a[1] < b[1] end)
@@ -394,6 +404,33 @@ function M.sync_regions_to_gmem(force)
   end
   reaper.gmem_write(M.GMEM_RGN_COUNT, n)
   s.region_count = n
+  s.region_names = names
+end
+
+--- Publish the name of the current region (as reported by the JSFX) to gmem.
+-- Only rewrites when the region or its name changes. The name number is
+-- cleared first and set last, so the JSFX never shows a half-written name.
+-- Names longer than RGN_NAME_MAX bytes are cut at a UTF-8 character boundary.
+function M.publish_region_name()
+  local s = M.state
+  local num = s.region_mode and s.region_current or 0
+  local name = (num > 0 and s.region_names[num]) or ""
+  if #name > M.RGN_NAME_MAX then
+    local cut = M.RGN_NAME_MAX
+    -- Step back over UTF-8 continuation bytes so no character is split
+    while cut > 0 and (name:byte(cut + 1) or 0) & 0xC0 == 0x80 do cut = cut - 1 end
+    name = name:sub(1, cut)
+  end
+  local key = num .. "\0" .. name
+  if key == s.region_name_sent then return end
+  s.region_name_sent = key
+
+  reaper.gmem_write(M.GMEM_RGN_NAME_NUM, 0)
+  for k = 1, #name do
+    reaper.gmem_write(M.GMEM_RGN_NAME + k - 1, name:byte(k))
+  end
+  reaper.gmem_write(M.GMEM_RGN_NAME_LEN, #name)
+  reaper.gmem_write(M.GMEM_RGN_NAME_NUM, num)
 end
 
 --- Convert a time position in seconds to HH:MM:SS:FF timecode.

@@ -19,6 +19,7 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 ### Added
 
 - **Art-Net Stream ID** — set the Art-Net 4 TimeCode Stream ID (0-255, default `0` = master) in Settings → Art-Net Output; written to byte 13 of the ArtTimeCode packet so receivers can tell multiple timecode streams apart
+- **Region name display** — in Region Timeline mode the JSFX shows the current region's name under the timecode in larger window sizes (long names are truncated with an ellipsis); the script's status line shows it too
 
 ## [1.3.0-beta-1] - 2026-11-12
 

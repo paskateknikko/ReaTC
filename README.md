@@ -157,7 +157,7 @@ Makes the Timeline source restart timecode at every region — handy when each s
 3. Set **Start TC** (the timecode output at each region's start, e.g. `00:00:00:00`)
 4. Optionally enable **Hours = region number** — region 3 then starts at `03:MM:SS:FF` (wraps at 40 for LTC/Art-Net/OSC; MTC only supports hours 0-23, so MTC output wraps at 24)
 
-Output TC = Start TC + time since region start. Outside regions no Timeline TC is output. When regions overlap, the one that started last wins. The ReaTC script must be running, since it sends the region list to the JSFX — the Timeline row shows `no script` otherwise. The global TC Offset is still applied on top.
+Output TC = Start TC + time since region start. Outside regions no Timeline TC is output. When regions overlap, the one that started last wins. The ReaTC script must be running, since it sends the region list to the JSFX — the Timeline row shows `no script` otherwise. In larger JSFX window sizes the current region's name is shown under the timecode. The global TC Offset is still applied on top.
 
 ### Bake LTC from Regions
 

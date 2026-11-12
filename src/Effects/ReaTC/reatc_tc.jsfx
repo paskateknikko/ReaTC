@@ -54,6 +54,9 @@ version:{{VERSION}}
 //   [35] RGN_START_F     Script -> JSFX   TC at region start: frames
 //   [36] RGN_COUNT       Script -> JSFX   number of regions in list (0-1000)
 //   [37] RGN_CURRENT     JSFX -> Script   region number at play position (0=none)
+//   [38] RGN_NAME_NUM    Script -> JSFX   region number the name below belongs to (0=none)
+//   [39] RGN_NAME_LEN    Script -> JSFX   name length in bytes (0-64)
+//   [3200..3263] RGN_NAME Script -> JSFX  region name, one UTF-8 byte per cell
 //   [100+i*3 ...]        Script -> JSFX   region list sorted by start:
 //                                         +0 start (s), +1 end (s), +2 region number
 
@@ -116,6 +119,7 @@ TC_OFFSET_H=20; TC_OFFSET_M=21; TC_OFFSET_S=22; TC_OFFSET_F=23; TC_OFFSET_SIGN=2
 RGN_MODE=30; RGN_HRS_NUM=31;
 RGN_START_H=32; RGN_START_M=33; RGN_START_S=34; RGN_START_F=35;
 RGN_COUNT=36; RGN_CURRENT=37; RGN_LIST=100; RGN_MAX=1000;
+RGN_NAME_NUM=38; RGN_NAME_LEN=39; RGN_NAME=3200; RGN_NAME_MAX=64;
 
 // Source IDs
 SRC_NONE=0; SRC_LTC=1; SRC_MTC=2; SRC_TIMELINE=3;
@@ -1255,6 +1259,23 @@ tiny_mode ? (
   tc_area_h = panel_h - 50;
 );
 
+// Region name line under the TC (larger layouts only, Timeline in RGN mode).
+// The name comes from the script and is only shown while it matches the
+// region the JSFX is currently in, so a stale name never flashes up.
+rgn_name_show = 0;
+!tiny_mode && tc_area_h >= 90 && tl_region_mode && active_source == SRC_TIMELINE &&
+  tl_region > 0 && gmem[RGN_NAME_NUM] == tl_region && gmem[RGN_NAME_LEN] > 0 ? (
+  strcpy(#rgn_name, "");
+  rgn_i = 0;
+  loop(min(floor(gmem[RGN_NAME_LEN]), RGN_NAME_MAX),
+    sprintf(#rgn_ch, "%c", gmem[RGN_NAME + rgn_i]);
+    strcat(#rgn_name, #rgn_ch);
+    rgn_i += 1;
+  );
+  rgn_name_show = 1;
+  tc_area_h -= 22;
+);
+
 // TC color based on active source
 active_source == SRC_LTC ? (
   gfx_r=0.20; gfx_g=0.88; gfx_b=0.38;
@@ -1312,6 +1333,30 @@ gfx_measurestr(#tc_str, tcw, tch);
 gfx_x = panel_x + (panel_w - tcw) / 2;
 gfx_y = tc_area_y + tc_nudge + (tc_area_h - tc_nudge - tch) / 2;
 gfx_drawstr(#tc_str);
+
+rgn_name_show ? (
+  gfx_setfont(1, "Arial", 15, 'b');
+  gfx_r=0.95; gfx_g=0.65; gfx_b=0.15;
+  gfx_measurestr(#rgn_name, rgn_nw, rgn_nh);
+  // Clip overly long names to the panel width: drop whole UTF-8 characters
+  // (continuation bytes first, then the lead byte) and append an ellipsis.
+  rgn_trunc = 0;
+  while(rgn_nw > panel_w - 24 && strlen(#rgn_name) > 0) (
+    while(strlen(#rgn_name) > 0 &&
+          (str_getchar(#rgn_name, strlen(#rgn_name) - 1, 'cu') & 0xC0) == 0x80) (
+      str_setlen(#rgn_name, strlen(#rgn_name) - 1);
+    );
+    str_setlen(#rgn_name, max(0, strlen(#rgn_name) - 1));
+    strcpy(#rgn_disp, #rgn_name);
+    strcat(#rgn_disp, "\xE2\x80\xA6");
+    gfx_measurestr(#rgn_disp, rgn_nw, rgn_nh);
+    rgn_trunc = 1;
+  );
+  rgn_trunc ? strcpy(#rgn_name, #rgn_disp);
+  gfx_x = panel_x + (panel_w - rgn_nw) / 2;
+  gfx_y = tc_area_y + tc_area_h + 2;
+  gfx_drawstr(#rgn_name);
+);
 
 // ── Info bar (hidden in tiny mode) ──
 !tiny_mode ? (

@@ -115,6 +115,7 @@ local function loop()
   -- Publish region timeline settings + region list for JSFX region mode
   core.write_region_settings_to_gmem()
   core.sync_regions_to_gmem()
+  core.publish_region_name()
 
   -- Read active TC from JSFX via gmem
   core.update_tc_from_gmem()
