@@ -6,11 +6,11 @@
 -- ReaTC runtime — UI, outputs, and the main loop all read/write it.
 -- @module reatc_core
 -- @noindex
--- @version 1.2.1
+-- @version 1.3.0-beta-2
 
 local M = {}
 
-M.VERSION = "1.2.1"
+M.VERSION = "1.3.0-beta-2"
 M.EXT_SECTION = "ReaTC"
 M.MIN_WIN_W, M.MIN_WIN_H = 440, 240
 
@@ -44,8 +44,9 @@ do
   M.script_path = info.source:match("@(.+[\\/])") or ""
 end
 
-M.py_artnet = M.script_path .. "reatc_artnet.py"
-M.py_osc    = M.script_path .. "reatc_osc.py"
+M.py_artnet       = M.script_path .. "reatc_artnet.py"
+M.py_osc          = M.script_path .. "reatc_osc.py"
+M.py_netdiscover  = M.script_path .. "reatc_netdiscover.py"
 
 M.is_win = reaper.GetOS():find("Win") ~= nil
 M.dev_null = M.is_win and "2>NUL" or "2>/dev/null"
@@ -73,6 +74,20 @@ M.GMEM_TC_OFFSET_M     = 21
 M.GMEM_TC_OFFSET_S     = 22
 M.GMEM_TC_OFFSET_F     = 23
 M.GMEM_TC_OFFSET_SIGN  = 24
+M.GMEM_RGN_MODE        = 30
+M.GMEM_RGN_HRS_NUM     = 31
+M.GMEM_RGN_START_H     = 32
+M.GMEM_RGN_START_M     = 33
+M.GMEM_RGN_START_S     = 34
+M.GMEM_RGN_START_F     = 35
+M.GMEM_RGN_COUNT       = 36
+M.GMEM_RGN_CURRENT     = 37
+M.GMEM_RGN_LIST        = 100  -- 3 cells per region: start, end, number
+M.RGN_MAX              = 1000 -- must match RGN_MAX in reatc_tc.jsfx
+M.GMEM_RGN_NAME_NUM    = 38   -- region number the published name belongs to
+M.GMEM_RGN_NAME_LEN    = 39
+M.GMEM_RGN_NAME        = 3200 -- one UTF-8 byte per cell
+M.RGN_NAME_MAX         = 64   -- must match RGN_NAME_MAX in reatc_tc.jsfx
 
 -- State
 M.state = {
@@ -81,23 +96,31 @@ M.state = {
   python_error = nil,
 
   -- Art-Net
-  artnet_enabled   = false,
-  artnet_proc      = nil,
-  dest_ip          = "2.0.0.1",
-  framerate_type   = M.FR_EBU,
-  packets_sent     = 0,
-  artnet_error     = nil,
-  last_artnet_time = 0,
+  artnet_enabled        = false,
+  artnet_proc           = nil,
+  dest_ip               = "2.0.0.1",
+  artnet_preferred_ip   = "",  -- CIDR (e.g. "10.0.0.0/8") or "" = auto
+  artnet_preferred_iface = "",  -- explicit NIC name override, "" = none
+  artnet_stream_id      = 0,   -- Art-Net 4 timecode Stream ID (0-255, 0 = master)
+  framerate_type        = M.FR_EBU,
+  packets_sent          = 0,
+  artnet_error          = nil,
+  last_artnet_time      = 0,
 
   -- OSC
-  osc_enabled      = false,
-  osc_ip           = "127.0.0.1",
-  osc_port         = 9000,
-  osc_address      = "/tc",
-  osc_proc         = nil,
-  osc_error        = nil,
-  last_osc_time    = 0,
-  osc_packets_sent = 0,
+  osc_enabled          = false,
+  osc_ip               = "127.0.0.1",
+  osc_port             = 9000,
+  osc_address          = "/tc",
+  osc_preferred_ip     = "",
+  osc_preferred_iface  = "",
+  osc_proc             = nil,
+  osc_error            = nil,
+  last_osc_time        = 0,
+  osc_packets_sent     = 0,
+
+  -- Network interface discovery (populated lazily by list_interfaces())
+  interfaces       = nil,  -- array of { ip, iface, broadcast, netmask }
 
   -- Active TC (read from gmem, written by JSFX)
   tc_h = 0, tc_m = 0, tc_s = 0, tc_f = 0,
@@ -115,6 +138,20 @@ M.state = {
   tc_offset_s        = 0,
   tc_offset_f        = 0,
   tc_offset_negative = false,
+
+  -- Region timeline mode (Timeline source TC relative to region start)
+  region_mode           = false,  -- read from JSFX (Timeline mode button)
+  region_hours_from_num = true,   -- hours = region number
+  region_start_h        = 0,      -- TC at region start (hours ignored if hours_from_num)
+  region_start_m        = 0,
+  region_start_s        = 0,
+  region_start_f        = 0,
+  region_count          = 0,      -- regions currently published to gmem
+  region_current        = 0,      -- region number at play position (from JSFX)
+  region_names          = {},     -- region number -> name (from last sync)
+  region_name_sent      = nil,    -- "num\0name" last published to gmem
+  region_sync_state     = nil,    -- last project state change count synced
+  region_sync_proj      = nil,    -- last project synced
 
   -- UI state
   show_settings  = false,
@@ -192,6 +229,210 @@ function M.is_valid_ipv4(ip)
   return #octets == 4
 end
 
+--- Validate a comma-separated list of IPv4 addresses (for multi-unicast).
+-- Whitespace around commas is allowed. An empty list is invalid.
+-- @param list string e.g. "192.168.0.50, 192.168.0.51"
+-- @return boolean true if every item is a valid IPv4
+function M.is_valid_ipv4_list(list)
+  if not list or type(list) ~= "string" then return false end
+  local count = 0
+  for item in list:gmatch("[^,]+") do
+    local trimmed = item:gsub("^%s+", ""):gsub("%s+$", "")
+    if not M.is_valid_ipv4(trimmed) then return false end
+    count = count + 1
+  end
+  return count > 0
+end
+
+--- List local IPv4 interfaces by invoking reatc_netdiscover.py.
+-- Output is tab-separated (iface names can contain spaces: "Wi-Fi 2").
+-- Caches the result in `state.interfaces`. Pass `force = true` to refresh.
+-- @param force boolean re-run discovery even if cached
+-- @return table array of { ip, iface, broadcast, netmask } (possibly empty)
+function M.list_interfaces(force)
+  local s = M.state
+  if s.interfaces and not force then return s.interfaces end
+  s.interfaces = {}
+  if not s.python_bin then return s.interfaces end
+
+  local q = M.is_win and ('"' .. s.python_bin .. '"') or s.python_bin
+  local cmd = q .. ' "' .. M.py_netdiscover .. '" ' .. M.dev_null
+  local h = io.popen(cmd, "r")
+  if not h then return s.interfaces end
+  local out = h:read("*a") or ""
+  h:close()
+
+  for line in out:gmatch("[^\r\n]+") do
+    local ip, iface, bcast, mask = line:match("^([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)$")
+    if ip and M.is_valid_ipv4(ip) then
+      s.interfaces[#s.interfaces + 1] = {
+        ip = ip,
+        iface = iface,
+        broadcast = (bcast ~= "-") and bcast or nil,
+        netmask = mask,
+      }
+    end
+  end
+  return s.interfaces
+end
+
+--- Convert a dotted-quad IPv4 to a 32-bit integer, or nil on invalid input.
+local function ipv4_to_int(ip)
+  if not M.is_valid_ipv4(ip) then return nil end
+  local a, b, c, d = ip:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+  return ((tonumber(a) << 24) | (tonumber(b) << 16)
+        | (tonumber(c) << 8)  | tonumber(d)) & 0xFFFFFFFF
+end
+
+--- Validate a CIDR notation string or bare IPv4 (treated as /32).
+-- @param s string e.g. "10.0.0.0/8" or "192.168.1.100"
+-- @return boolean true if the input parses as a valid IPv4 network
+function M.is_valid_cidr(s)
+  if not s or type(s) ~= "string" or s == "" then return false end
+  local net, prefix_str = s:match("^([%d.]+)/(%d+)$")
+  if not net then
+    return M.is_valid_ipv4(s)
+  end
+  local prefix = tonumber(prefix_str)
+  if not prefix or prefix < 0 or prefix > 32 then return false end
+  return M.is_valid_ipv4(net)
+end
+
+--- Test whether an IPv4 falls inside a CIDR range.
+-- A bare IP (no /prefix) is treated as /32 — only an exact match succeeds.
+-- @param ip string dotted-quad IPv4
+-- @param cidr string "network/prefix" or bare IPv4
+-- @return boolean true if ip is in the CIDR range
+function M.cidr_match(ip, cidr)
+  if not (ip and cidr) then return false end
+  local net, prefix_str = cidr:match("^([%d.]+)/(%d+)$")
+  local prefix
+  if net then
+    prefix = tonumber(prefix_str)
+  else
+    net = cidr
+    prefix = 32
+  end
+  if not (prefix and prefix >= 0 and prefix <= 32) then return false end
+  local net_int = ipv4_to_int(net)
+  local ip_int  = ipv4_to_int(ip)
+  if not (net_int and ip_int) then return false end
+  if prefix == 0 then return true end
+  local mask = (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF
+  return (net_int & mask) == (ip_int & mask)
+end
+
+--- Resolve a preferred-IP / preferred-interface pair to a concrete bind IP.
+-- Resolution order: explicit interface override → CIDR match → none (Auto).
+-- @param preferred_ip string CIDR or IP (or "" for none)
+-- @param preferred_iface string interface name (or "" for none)
+-- @return string|nil resolved IPv4 to bind to, or nil for Auto/default route
+-- @return string|nil human-readable "iface (ip)" label, or nil for Auto
+function M.resolve_bind_ip(preferred_ip, preferred_iface)
+  local ifaces = M.list_interfaces()
+
+  if preferred_iface and preferred_iface ~= "" then
+    for _, it in ipairs(ifaces) do
+      if it.iface == preferred_iface then
+        return it.ip, string.format("%s (%s)", it.iface, it.ip)
+      end
+    end
+  end
+
+  if preferred_ip and preferred_ip ~= "" then
+    for _, it in ipairs(ifaces) do
+      if M.cidr_match(it.ip, preferred_ip) then
+        return it.ip, string.format("%s (%s)", it.iface, it.ip)
+      end
+    end
+  end
+
+  return nil, nil
+end
+
+--- Exchange region timeline state with the JSFX via gmem.
+-- Writes start TC + hours option (Script -> JSFX) and reads the Timeline
+-- mode and current region number (JSFX -> Script; mode is the JSFX's
+-- slider32). Called every defer cycle (cheap: a handful of gmem ops).
+function M.write_region_settings_to_gmem()
+  local s = M.state
+  s.region_mode = reaper.gmem_read(M.GMEM_RGN_MODE) > 0.5
+  reaper.gmem_write(M.GMEM_RGN_HRS_NUM, s.region_hours_from_num and 1 or 0)
+  reaper.gmem_write(M.GMEM_RGN_START_H, s.region_start_h)
+  reaper.gmem_write(M.GMEM_RGN_START_M, s.region_start_m)
+  reaper.gmem_write(M.GMEM_RGN_START_S, s.region_start_s)
+  reaper.gmem_write(M.GMEM_RGN_START_F, s.region_start_f)
+  s.region_current = math.floor(reaper.gmem_read(M.GMEM_RGN_CURRENT))
+end
+
+--- Publish the current project's region list to gmem for the JSFX.
+-- Only rewrites the list when the project or its state change count differs
+-- from the last sync. Regions are sorted by start time so the JSFX can pick
+-- the region with the latest start when regions overlap.
+-- @param force boolean rewrite even if the project has not changed
+function M.sync_regions_to_gmem(force)
+  local s = M.state
+  local proj = reaper.EnumProjects(-1)
+  local change = reaper.GetProjectStateChangeCount(proj)
+  if not force and proj == s.region_sync_proj and change == s.region_sync_state then
+    return
+  end
+  s.region_sync_proj, s.region_sync_state = proj, change
+
+  local regions = {}
+  local names = {}
+  local i = 0
+  while true do
+    local ret, isrgn, pos, rgnend, name, num = reaper.EnumProjectMarkers3(proj, i)
+    if ret == 0 then break end
+    if isrgn then
+      regions[#regions + 1] = { pos, rgnend, num }
+      names[num] = name
+    end
+    i = i + 1
+  end
+  table.sort(regions, function(a, b) return a[1] < b[1] end)
+
+  local n = math.min(#regions, M.RGN_MAX)
+  -- Zero the count first so the JSFX never reads a half-written list
+  reaper.gmem_write(M.GMEM_RGN_COUNT, 0)
+  for k = 1, n do
+    local base = M.GMEM_RGN_LIST + (k - 1) * 3
+    reaper.gmem_write(base,     regions[k][1])
+    reaper.gmem_write(base + 1, regions[k][2])
+    reaper.gmem_write(base + 2, regions[k][3])
+  end
+  reaper.gmem_write(M.GMEM_RGN_COUNT, n)
+  s.region_count = n
+  s.region_names = names
+end
+
+--- Publish the name of the current region (as reported by the JSFX) to gmem.
+-- Only rewrites when the region or its name changes. The name number is
+-- cleared first and set last, so the JSFX never shows a half-written name.
+-- Names longer than RGN_NAME_MAX bytes are cut at a UTF-8 character boundary.
+function M.publish_region_name()
+  local s = M.state
+  local num = s.region_mode and s.region_current or 0
+  local name = (num > 0 and s.region_names[num]) or ""
+  if #name > M.RGN_NAME_MAX then
+    local cut = M.RGN_NAME_MAX
+    -- Step back over UTF-8 continuation bytes so no character is split
+    while cut > 0 and (name:byte(cut + 1) or 0) & 0xC0 == 0x80 do cut = cut - 1 end
+    name = name:sub(1, cut)
+  end
+  local key = num .. "\0" .. name
+  if key == s.region_name_sent then return end
+  s.region_name_sent = key
+
+  reaper.gmem_write(M.GMEM_RGN_NAME_NUM, 0)
+  for k = 1, #name do
+    reaper.gmem_write(M.GMEM_RGN_NAME + k - 1, name:byte(k))
+  end
+  reaper.gmem_write(M.GMEM_RGN_NAME_LEN, #name)
+  reaper.gmem_write(M.GMEM_RGN_NAME_NUM, num)
+end
+
 --- Convert a time position in seconds to HH:MM:SS:FF timecode.
 -- Uses integer math for drop-frame (29.97fps) to avoid float drift.
 -- @param pos number time position in seconds (clamped to >= 0)
@@ -223,17 +464,27 @@ end
 
 -- Settings key constants
 local SK = {
-  DEST_IP           = "dest_ip",
-  ARTNET_ENABLED    = "artnet_enabled",
-  OSC_ENABLED       = "osc_enabled",
-  OSC_IP            = "osc_ip",
-  OSC_PORT          = "osc_port",
-  OSC_ADDRESS       = "osc_address",
-  TC_OFFSET_H       = "tc_offset_h",
-  TC_OFFSET_M       = "tc_offset_m",
-  TC_OFFSET_S       = "tc_offset_s",
-  TC_OFFSET_F       = "tc_offset_f",
-  TC_OFFSET_NEGATIVE = "tc_offset_negative",
+  DEST_IP                = "dest_ip",
+  ARTNET_ENABLED         = "artnet_enabled",
+  ARTNET_PREFERRED_IP    = "artnet_preferred_ip",
+  ARTNET_PREFERRED_IFACE = "artnet_preferred_iface",
+  ARTNET_STREAM_ID       = "artnet_stream_id",
+  OSC_ENABLED            = "osc_enabled",
+  OSC_IP                 = "osc_ip",
+  OSC_PORT               = "osc_port",
+  OSC_ADDRESS            = "osc_address",
+  OSC_PREFERRED_IP       = "osc_preferred_ip",
+  OSC_PREFERRED_IFACE    = "osc_preferred_iface",
+  TC_OFFSET_H            = "tc_offset_h",
+  TC_OFFSET_M            = "tc_offset_m",
+  TC_OFFSET_S            = "tc_offset_s",
+  TC_OFFSET_F            = "tc_offset_f",
+  TC_OFFSET_NEGATIVE     = "tc_offset_negative",
+  REGION_HOURS_FROM_NUM  = "region_hours_from_num",
+  REGION_START_H         = "region_start_h",
+  REGION_START_M         = "region_start_m",
+  REGION_START_S         = "region_start_s",
+  REGION_START_F         = "region_start_f",
 }
 
 --- Load all settings from REAPER ExtState and apply to `state`.
@@ -245,18 +496,33 @@ function M.load_settings()
   end
   local s = M.state
   local loaded_ip = gets(SK.DEST_IP)
-  s.dest_ip = (loaded_ip and M.is_valid_ipv4(loaded_ip)) and loaded_ip or s.dest_ip
+  s.dest_ip = (loaded_ip and M.is_valid_ipv4_list(loaded_ip)) and loaded_ip or s.dest_ip
   s.artnet_enabled  = gets(SK.ARTNET_ENABLED) == "true"
+  local loaded_artnet_cidr = gets(SK.ARTNET_PREFERRED_IP)
+  s.artnet_preferred_ip    = (loaded_artnet_cidr and M.is_valid_cidr(loaded_artnet_cidr))
+                             and loaded_artnet_cidr or ""
+  s.artnet_preferred_iface = gets(SK.ARTNET_PREFERRED_IFACE) or ""
+  local loaded_stream = math.floor(tonumber(gets(SK.ARTNET_STREAM_ID)) or 0)
+  s.artnet_stream_id = (loaded_stream >= 0 and loaded_stream <= 255) and loaded_stream or 0
   s.osc_enabled    = gets(SK.OSC_ENABLED) == "true"
   local loaded_osc_ip = gets(SK.OSC_IP)
   s.osc_ip         = (loaded_osc_ip and M.is_valid_ipv4(loaded_osc_ip)) and loaded_osc_ip or s.osc_ip
   s.osc_port       = tonumber(gets(SK.OSC_PORT)) or 9000
   s.osc_address    = gets(SK.OSC_ADDRESS) or "/tc"
+  local loaded_osc_cidr = gets(SK.OSC_PREFERRED_IP)
+  s.osc_preferred_ip     = (loaded_osc_cidr and M.is_valid_cidr(loaded_osc_cidr))
+                           and loaded_osc_cidr or ""
+  s.osc_preferred_iface  = gets(SK.OSC_PREFERRED_IFACE) or ""
   s.tc_offset_h        = tonumber(gets(SK.TC_OFFSET_H)) or 0
   s.tc_offset_m        = tonumber(gets(SK.TC_OFFSET_M)) or 0
   s.tc_offset_s        = tonumber(gets(SK.TC_OFFSET_S)) or 0
   s.tc_offset_f        = tonumber(gets(SK.TC_OFFSET_F)) or 0
   s.tc_offset_negative = gets(SK.TC_OFFSET_NEGATIVE) == "true"
+  s.region_hours_from_num = gets(SK.REGION_HOURS_FROM_NUM) ~= "false"  -- default on
+  s.region_start_h        = tonumber(gets(SK.REGION_START_H)) or 0
+  s.region_start_m        = tonumber(gets(SK.REGION_START_M)) or 0
+  s.region_start_s        = tonumber(gets(SK.REGION_START_S)) or 0
+  s.region_start_f        = tonumber(gets(SK.REGION_START_F)) or 0
 
   -- Clean up legacy settings (framerate now owned by JSFX, old track-management keys)
   reaper.DeleteExtState(M.EXT_SECTION, "framerate_type", true)
@@ -272,17 +538,27 @@ end
 function M.save_settings()
   local s = M.state
   local function sets(k, v) reaper.SetExtState(M.EXT_SECTION, k, tostring(v), true) end
-  sets(SK.DEST_IP,           s.dest_ip)
-  sets(SK.ARTNET_ENABLED,    s.artnet_enabled)
-  sets(SK.OSC_ENABLED,       s.osc_enabled)
-  sets(SK.OSC_IP,            s.osc_ip)
-  sets(SK.OSC_PORT,          s.osc_port)
-  sets(SK.OSC_ADDRESS,       s.osc_address)
+  sets(SK.DEST_IP,                s.dest_ip)
+  sets(SK.ARTNET_ENABLED,         s.artnet_enabled)
+  sets(SK.ARTNET_PREFERRED_IP,    s.artnet_preferred_ip)
+  sets(SK.ARTNET_PREFERRED_IFACE, s.artnet_preferred_iface)
+  sets(SK.ARTNET_STREAM_ID,       s.artnet_stream_id)
+  sets(SK.OSC_ENABLED,            s.osc_enabled)
+  sets(SK.OSC_IP,                 s.osc_ip)
+  sets(SK.OSC_PORT,               s.osc_port)
+  sets(SK.OSC_ADDRESS,            s.osc_address)
+  sets(SK.OSC_PREFERRED_IP,       s.osc_preferred_ip)
+  sets(SK.OSC_PREFERRED_IFACE,    s.osc_preferred_iface)
   sets(SK.TC_OFFSET_H,       s.tc_offset_h)
   sets(SK.TC_OFFSET_M,       s.tc_offset_m)
   sets(SK.TC_OFFSET_S,       s.tc_offset_s)
   sets(SK.TC_OFFSET_F,       s.tc_offset_f)
   sets(SK.TC_OFFSET_NEGATIVE, s.tc_offset_negative)
+  sets(SK.REGION_HOURS_FROM_NUM, s.region_hours_from_num)
+  sets(SK.REGION_START_H,        s.region_start_h)
+  sets(SK.REGION_START_M,        s.region_start_m)
+  sets(SK.REGION_START_S,        s.region_start_s)
+  sets(SK.REGION_START_F,        s.region_start_f)
 end
 
 return M

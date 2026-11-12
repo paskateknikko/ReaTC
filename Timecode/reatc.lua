@@ -1,6 +1,6 @@
 -- @description Art-Net and MIDI Timecode sender for REAPER
 -- @author Tuukka Aimasmäki
--- @version 1.2.1
+-- @version 1.3.0-beta-2
 -- @link https://github.com/paskateknikko/ReaTC
 -- @about
 --   # ReaTC
@@ -23,14 +23,10 @@
 --   [extension darwin64] reaper_reatc-x86_64.dylib
 --   [extension win64] reaper_reatc64.dll
 -- @changelog
---   ### Changed
+--   ### Added
 -- 
--- - **Local build naming** — `make all` / `make install` now names the extension binary with architecture suffix matching CI artifacts (e.g. `reaper_reatc-arm64.dylib`)
--- 
--- ### Fixed
--- 
--- - **LTC extended hours** — accept LTC timecode with hours 0-39 (full BCD range); REAPER and some systems output hours >= 24 which were previously rejected
--- - **Duplicate extension loading** — C++ extension no longer fatally exits when action IDs are already registered (e.g. local + ReaPack install coexisting); logs a warning instead
+-- - **Art-Net Stream ID** — set the Art-Net 4 TimeCode Stream ID (0-255, default `0` = master) in Settings → Art-Net Output; written to byte 13 of the ArtTimeCode packet so receivers can tell multiple timecode streams apart
+-- - **Region name display** — in Region Timeline mode the JSFX shows the current region's name under the timecode in larger window sizes (long names are truncated with an ellipsis); the script's status line shows it too
 
 --- ReaTC — https://github.com/paskateknikko/ReaTC
 -- Copyright (c) 2025 Tuukka Aimasmäki. MIT License — see LICENSE.
@@ -40,10 +36,29 @@
 -- ExtState toggle commands from the C++ extension, and sends network output.
 -- TC sources and outputs are configured in the ReaTC Timecode Converter JSFX.
 
-if not reaper.ImGui_GetBuiltinPath then
-  reaper.MB(
-    'ReaImGui not installed.\n\nInstall it from ReaPack (ReaTeam Extensions → ReaImGui).',
-    'ReaTC', 0)
+local function check_reaimgui()
+  if not reaper.ImGui_GetBuiltinPath then
+    return false
+  end
+  package.path = reaper.ImGui_GetBuiltinPath() .. '/?.lua;' .. package.path
+  local ok, mod = pcall(require, 'imgui')
+  if not ok then return false end
+  return pcall(mod, '0.10')
+end
+
+if not check_reaimgui() then
+  if reaper.ReaPack_BrowsePackages then
+    local choice = reaper.MB(
+      'ReaImGui 0.10 or newer is required.\n\nOpen ReaPack to install or update it now?',
+      'ReaTC', 4)
+    if choice == 6 then
+      reaper.ReaPack_BrowsePackages('cfillion ReaImGui')
+    end
+  else
+    reaper.MB(
+      'ReaImGui 0.10 or newer is required.\n\nInstall ReaPack first, then install "ReaImGui" from ReaTeam Extensions.',
+      'ReaTC', 0)
+  end
   return
 end
 
@@ -99,6 +114,11 @@ local function loop()
   reaper.gmem_write(core.GMEM_TC_OFFSET_S, core.state.tc_offset_s)
   reaper.gmem_write(core.GMEM_TC_OFFSET_F, core.state.tc_offset_f)
   reaper.gmem_write(core.GMEM_TC_OFFSET_SIGN, core.state.tc_offset_negative and 1 or 0)
+
+  -- Publish region timeline settings + region list for JSFX region mode
+  core.write_region_settings_to_gmem()
+  core.sync_regions_to_gmem()
+  core.publish_region_name()
 
   -- Read active TC from JSFX via gmem
   core.update_tc_from_gmem()
