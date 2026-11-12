@@ -14,6 +14,8 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 
 ## [Unreleased]
 
+## [1.3.0-beta-1] - 2026-11-12
+
 ### Added
 
 - **Preferred IP + Interface override for network outputs** — Art-Net and OSC settings gained a gma3-style "Preferred IP" CIDR field (e.g. `10.0.0.0/8`) and an Interface combo; the daemon's sending socket binds to the local NIC whose IP falls inside the Preferred IP range, or to an explicitly chosen interface when subnets overlap
@@ -24,7 +26,6 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 ### Fixed
 
 - **MTC output with TC Offset** — Timeline-source MTC drift correction now compares against the output TC (after offset) instead of the raw play position, so a non-zero offset no longer forces a resync every two frames
-- **Art-Net packet builder** — restored `build_artnet_timecode()` (renamed in the multi-unicast refactor, which broke the test suite) and its per-field byte masking, so out-of-range values can no longer raise inside the daemon
 
 ## [1.2.1] - 2026-04-04
 
