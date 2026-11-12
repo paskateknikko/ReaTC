@@ -75,3 +75,58 @@ jobs:
 
       - name: Run C++ unit tests
         run: ctest --test-dir src/extension/build -C Release --output-on-failure
+
+  extension:
+    # Same runners as release.yml, so platform-specific extension code
+    # (Winsock / winmm / MSVC, macOS getifaddrs, deployment target) is
+    # compiled and tested on every PR, not first at release time.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest      # Apple Silicon
+            name: macOS arm64
+          - os: macos-15-intel    # Intel
+            name: macOS x86_64
+          - os: windows-latest
+            name: Windows x64
+    runs-on: ${{ matrix.os }}
+    name: Extension (${{ matrix.name }})
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build C++ extension + unit tests
+        shell: bash
+        run: |
+          cmake -S src/extension -B src/extension/build -DCMAKE_BUILD_TYPE=Release -DREATC_BUILD_TESTS=ON -DREATC_VERSION=DEV
+          cmake --build src/extension/build --config Release
+
+      - name: Run C++ unit tests
+        shell: bash
+        run: ctest --test-dir src/extension/build -C Release --output-on-failure
+
+      - name: Check macOS deployment target
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          source build/platforms.env
+          lib=src/extension/build/reaper_reatc.dylib
+          minos=$(otool -l "$lib" | awk '/LC_BUILD_VERSION/{f=1} f&&/minos/{print $2; exit}')
+          # Apple Silicon cannot target below 11.0; the linker raises it.
+          expected=$MACOS_DEPLOYMENT_TARGET
+          if [ "$(uname -m)" = "arm64" ]; then
+            expected=$(printf '%s\n11.0\n' "$MACOS_DEPLOYMENT_TARGET" | sort -V | tail -1)
+          fi
+          echo "minos=$minos expected=$expected"
+          [ "$minos" = "$expected" ] || { echo "ERROR: deployment target $minos, expected $expected"; exit 1; }
+          nm -gU "$lib" | grep -q ' _ReaperPluginEntry$' || { echo "ERROR: ReaperPluginEntry not exported"; exit 1; }
+          echo "✓ minos $minos, ReaperPluginEntry exported"
+
+      - name: Check Windows DLL
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          dll=src/extension/build/Release/reaper_reatc64.dll
+          test -f "$dll" || { echo "ERROR: $dll not built"; exit 1; }
+          echo "✓ $dll built"
