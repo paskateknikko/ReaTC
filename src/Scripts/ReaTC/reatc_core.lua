@@ -135,7 +135,7 @@ M.state = {
   tc_offset_negative = false,
 
   -- Region timeline mode (Timeline source TC relative to region start)
-  region_mode           = false,
+  region_mode           = false,  -- read from JSFX (Timeline mode button)
   region_hours_from_num = true,   -- hours = region number
   region_start_h        = 0,      -- TC at region start (hours ignored if hours_from_num)
   region_start_m        = 0,
@@ -343,11 +343,13 @@ function M.resolve_bind_ip(preferred_ip, preferred_iface)
   return nil, nil
 end
 
---- Publish the region timeline settings to gmem for the JSFX.
--- Called every defer cycle (cheap: a handful of gmem writes).
+--- Exchange region timeline state with the JSFX via gmem.
+-- Writes start TC + hours option (Script -> JSFX) and reads the Timeline
+-- mode and current region number (JSFX -> Script; mode is the JSFX's
+-- slider32). Called every defer cycle (cheap: a handful of gmem ops).
 function M.write_region_settings_to_gmem()
   local s = M.state
-  reaper.gmem_write(M.GMEM_RGN_MODE,    s.region_mode and 1 or 0)
+  s.region_mode = reaper.gmem_read(M.GMEM_RGN_MODE) > 0.5
   reaper.gmem_write(M.GMEM_RGN_HRS_NUM, s.region_hours_from_num and 1 or 0)
   reaper.gmem_write(M.GMEM_RGN_START_H, s.region_start_h)
   reaper.gmem_write(M.GMEM_RGN_START_M, s.region_start_m)
@@ -439,7 +441,6 @@ local SK = {
   TC_OFFSET_S            = "tc_offset_s",
   TC_OFFSET_F            = "tc_offset_f",
   TC_OFFSET_NEGATIVE     = "tc_offset_negative",
-  REGION_MODE            = "region_mode",
   REGION_HOURS_FROM_NUM  = "region_hours_from_num",
   REGION_START_H         = "region_start_h",
   REGION_START_M         = "region_start_m",
@@ -476,7 +477,6 @@ function M.load_settings()
   s.tc_offset_s        = tonumber(gets(SK.TC_OFFSET_S)) or 0
   s.tc_offset_f        = tonumber(gets(SK.TC_OFFSET_F)) or 0
   s.tc_offset_negative = gets(SK.TC_OFFSET_NEGATIVE) == "true"
-  s.region_mode           = gets(SK.REGION_MODE) == "true"
   s.region_hours_from_num = gets(SK.REGION_HOURS_FROM_NUM) ~= "false"  -- default on
   s.region_start_h        = tonumber(gets(SK.REGION_START_H)) or 0
   s.region_start_m        = tonumber(gets(SK.REGION_START_M)) or 0
@@ -512,7 +512,6 @@ function M.save_settings()
   sets(SK.TC_OFFSET_S,       s.tc_offset_s)
   sets(SK.TC_OFFSET_F,       s.tc_offset_f)
   sets(SK.TC_OFFSET_NEGATIVE, s.tc_offset_negative)
-  sets(SK.REGION_MODE,           s.region_mode)
   sets(SK.REGION_HOURS_FROM_NUM, s.region_hours_from_num)
   sets(SK.REGION_START_H,        s.region_start_h)
   sets(SK.REGION_START_M,        s.region_start_m)

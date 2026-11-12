@@ -46,7 +46,7 @@ version:{{VERSION}}
 //   [22] TC_OFFSET_S     Script -> JSFX   offset seconds (0-59)
 //   [23] TC_OFFSET_F     Script -> JSFX   offset frames (0-fps)
 //   [24] TC_OFFSET_SIGN  Script -> JSFX   0=add 1=subtract
-//   [30] RGN_MODE        Script -> JSFX   Timeline mode: 0=absolute 1=region-relative
+//   [30] RGN_MODE        JSFX -> Script   Timeline mode (slider32): 0=absolute 1=regions
 //   [31] RGN_HRS_NUM     Script -> JSFX   1=hours taken from region number
 //   [32] RGN_START_H     Script -> JSFX   TC at region start: hours (0-39)
 //   [33] RGN_START_M     Script -> JSFX   TC at region start: minutes
@@ -97,6 +97,9 @@ slider30:0<0,255,1>-User Bits Byte 4
 
 // BGF bit position mode (0=SMPTE/REAPER-compatible, 1=EBU standard for 25fps)
 slider31:0<0,1,1{SMPTE (REAPER compatible),EBU standard}>-BGF Position Mode
+
+// Timeline source mode (Regions requires the ReaTC script for the region list)
+slider32:0<0,1,1{Absolute,Regions}>-Timeline Mode
 
 options:gmem=ReaTC_LTC
 
@@ -181,7 +184,7 @@ src_holdoff=0;  // grace period samples before switching to lower-priority sourc
 
 // ── Timeline state ──
 tl_h=0; tl_m=0; tl_s=0; tl_f=0; tl_active=0;
-tl_region_mode=0;  // 0=absolute timeline, 1=region-relative (from gmem[RGN_MODE])
+tl_region_mode=0;  // 0=absolute timeline, 1=region-relative (slider32)
 tl_region=0;       // region number at play position (0 = none / absolute mode)
 
 // ── GFX state ──
@@ -857,7 +860,8 @@ is_playing = (play_state & 1) ? 1 : 0;
 // ═══════════════════════════════════════════════════════════════════════
 
 // ── 1. Timeline source ──
-tl_region_mode = gmem[RGN_MODE] > 0.5;
+tl_region_mode = slider32 > 0.5;
+gmem[RGN_MODE] = tl_region_mode;
 tl_active = is_playing;
 tl_region_mode ? (
   // Region mode: only active while the play cursor is inside a region
@@ -1707,7 +1711,37 @@ tl_en ? (
 gfx_setfont(1, "Arial", 11, 0);
 tl_is_active ? (gfx_r=0.20; gfx_g=0.88; gfx_b=0.38;) : tl_en ? (gfx_r=0.55; gfx_g=0.58; gfx_b=0.65;) : (gfx_r=0.42; gfx_g=0.44; gfx_b=0.42;);
 gfx_x = src_col_x + 24; gfx_y = row_y + 3;
-gfx_drawstr(tl_region_mode ? "Regions" : "Timeline");
+gfx_drawstr("Timeline");
+
+// --- Timeline mode button (ABS / RGN), styled like the priority button ---
+tlm_btn_x = prio_btn_x;
+tlm_btn_y = row_y + 1;
+tlm_btn_w = prio_btn_w;
+tlm_btn_h = src_row_h - 6;
+gfx_r=0.10; gfx_g=0.12; gfx_b=0.16;
+gfx_rect(tlm_btn_x, tlm_btn_y, tlm_btn_w, tlm_btn_h, 1);
+gfx_r=0.25; gfx_g=0.27; gfx_b=0.35;
+gfx_rect(tlm_btn_x, tlm_btn_y, tlm_btn_w, 1, 1);
+gfx_rect(tlm_btn_x, tlm_btn_y+tlm_btn_h-1, tlm_btn_w, 1, 1);
+gfx_rect(tlm_btn_x, tlm_btn_y, 1, tlm_btn_h, 1);
+gfx_rect(tlm_btn_x+tlm_btn_w-1, tlm_btn_y, 1, tlm_btn_h, 1);
+gfx_setfont(1, "Arial", 8, 'b');
+tl_region_mode ? (gfx_r=0.30; gfx_g=0.32; gfx_b=0.38;) : (gfx_r=0.75; gfx_g=0.78; gfx_b=0.85;);
+gfx_measurestr("ABS", tlm_w, tlm_h);
+gfx_x = tlm_btn_x + (tlm_btn_w - tlm_w) / 2;
+gfx_y = tlm_btn_y + 3;
+gfx_drawstr("ABS");
+tl_region_mode ? (gfx_r=0.95; gfx_g=0.65; gfx_b=0.15;) : (gfx_r=0.30; gfx_g=0.32; gfx_b=0.38;);
+gfx_measurestr("RGN", tlm_w, tlm_h);
+gfx_x = tlm_btn_x + (tlm_btn_w - tlm_w) / 2;
+gfx_y = tlm_btn_y + tlm_btn_h - tlm_h - 3;
+gfx_drawstr("RGN");
+!settings_open && mouse_click &&
+  mouse_x >= tlm_btn_x && mouse_x < tlm_btn_x + tlm_btn_w &&
+  mouse_y >= tlm_btn_y && mouse_y < tlm_btn_y + tlm_btn_h ? (
+  slider32 = 1 - slider32; slider_automate(1<<31);
+  tl_region_mode = slider32 > 0.5;
+);
 
 // Mini TC box
 gfx_r=0.06; gfx_g=0.07; gfx_b=0.06;
@@ -1737,7 +1771,10 @@ gfx_drawstr(#tl_mini);
 // Status text
 gfx_setfont(1, "Arial", 9, 0);
 tl_en ? (
-  is_playing && tl_region_mode && !tl_active ? (
+  tl_region_mode && !script_running ? (
+    gfx_r=0.95; gfx_g=0.65; gfx_b=0.15;
+    strcpy(#tl_stat, "no script");
+  ) : is_playing && tl_region_mode && !tl_active ? (
     gfx_r=0.95; gfx_g=0.65; gfx_b=0.15;
     strcpy(#tl_stat, "no region");
   ) : is_playing ? (

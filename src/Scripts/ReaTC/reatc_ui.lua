@@ -405,19 +405,19 @@ return function(core, outputs)
     -- ── Region Timeline ────────────────────────────────────────────────────
     ImGui.SeparatorText(ctx, 'Region Timeline')
 
-    local rm_changed, rm = ImGui.Checkbox(ctx, 'TC relative to region start##rgnmode',
-      s.region_mode)
-    if rm_changed then
-      s.region_mode = rm
-      core.save_settings()
+    ImGui.Text(ctx, "Mode:")
+    ImGui.SameLine(ctx)
+    if s.region_mode then
+      ImGui.TextColored(ctx, C.orange, "Regions")
+    else
+      ImGui.TextColored(ctx, C.dim, "Absolute")
     end
     ImGui.PushStyleColor(ctx, ImGui.Col_Text, C.dim)
     ImGui.TextWrapped(ctx,
-      "Timeline source outputs Start TC + time since the current region's start. " ..
-      "No TC is output outside regions.")
+      "Switch with the ABS / RGN button on the JSFX Timeline row. In Regions mode " ..
+      "the Timeline source outputs Start TC + time since the current region's " ..
+      "start; no TC is output outside regions.")
     ImGui.PopStyleColor(ctx)
-
-    if not s.region_mode then ImGui.BeginDisabled(ctx) end
 
     local hn_changed, hn = ImGui.Checkbox(ctx, 'Hours = region number##rgnhrs',
       s.region_hours_from_num)
@@ -448,8 +448,6 @@ return function(core, outputs)
     ImGui.TextColored(ctx, C.dim,
       string.format("%d region%s in project", s.region_count,
         s.region_count == 1 and "" or "s"))
-
-    if not s.region_mode then ImGui.EndDisabled(ctx) end
 
     -- ── Tools ────────────────────────────────────────────────────────────────
     ImGui.SeparatorText(ctx, 'Tools')
