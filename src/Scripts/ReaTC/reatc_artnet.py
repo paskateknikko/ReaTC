@@ -6,11 +6,12 @@
 # Reads "H M S F tc_type" lines from stdin and sends Art-Net TimeCode packets.
 #
 # Usage:
-#   python3 reatc_artnet.py <dest_ip>[,<dest_ip>...] [--src-ip IP]
+#   python3 reatc_artnet.py <dest_ip>[,<dest_ip>...] [--src-ip IP] [--stream-id N]
 #
 # `dest_ip`   : one address or a comma-separated list (multi-unicast)
 # `--src-ip`  : bind the socket to this local IPv4, so broadcasts/directed
 #               broadcasts leave via the chosen NIC instead of the OS default
+# `--stream-id`: Art-Net 4 timecode Stream ID (0-255, 0 = master stream)
 #
 # Interface discovery lives in reatc_netdiscover.py.
 #
@@ -32,7 +33,7 @@ ARTNET_PORT = 6454
 
 
 def build_artnet_timecode(hours: int, mins: int, secs: int, frames: int,
-                          tc_type: int) -> bytes:
+                          tc_type: int, stream_id: int = 0) -> bytes:
     """Build a 19-byte Art-Net TimeCode packet.
 
     Args:
@@ -41,6 +42,8 @@ def build_artnet_timecode(hours: int, mins: int, secs: int, frames: int,
         secs: Seconds component (0-59).
         frames: Frame number (0-29).
         tc_type: Timecode type (0=24fps, 1=25fps, 2=29.97DF, 3=30fps).
+        stream_id: Art-Net 4 Stream ID (0-255, 0 = master). Lets receivers
+            tell multiple timecode streams apart.
 
     Returns:
         19-byte Art-Net TimeCode UDP payload. Each TC field is masked to
@@ -49,12 +52,13 @@ def build_artnet_timecode(hours: int, mins: int, secs: int, frames: int,
     return (
         b"Art-Net\x00"                     # ID (8)
         + struct.pack("<H", 0x9700)          # OpCode (2)
-        + b"\x00\x0E\x00\x00"                # ProtVer 14 + filler (4)
+        + b"\x00\x0E\x00"                    # ProtVer 14 + Filler1 (3)
+        + bytes((stream_id & 0xFF,))         # StreamId (1)
         + bytes(v & 0xFF for v in (frames, secs, mins, hours, tc_type))  # Timecode (5)
     )
 
 
-def run(dest_ips: list[str], src_ip: str | None) -> None:
+def run(dest_ips: list[str], src_ip: str | None, stream_id: int = 0) -> None:
     """Open UDP socket, optionally bind, then stream packets from stdin."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -77,7 +81,7 @@ def run(dest_ips: list[str], src_ip: str | None) -> None:
             if not (0 <= h <= 39 and 0 <= m <= 59 and 0 <= s <= 59
                     and 0 <= f <= 29 and 0 <= tc <= 3):
                 continue
-            pkt = build_artnet_timecode(h, m, s, f, tc)
+            pkt = build_artnet_timecode(h, m, s, f, tc, stream_id)
             for dest in dest_ips:
                 sock.sendto(pkt, (dest, ARTNET_PORT))
     finally:
@@ -91,14 +95,18 @@ def main() -> None:
                    help="Destination IP, or comma-separated list")
     p.add_argument("--src-ip", dest="src_ip", default=None,
                    help="Local IPv4 to bind the sending socket to")
+    p.add_argument("--stream-id", dest="stream_id", type=int, default=0,
+                   help="Art-Net 4 timecode Stream ID (0-255, 0 = master)")
     args = p.parse_args()
 
     dests = [ip.strip() for ip in args.dest_ip.split(",") if ip.strip()]
     if not dests:
         p.error("no valid destination IPs")
+    if not 0 <= args.stream_id <= 255:
+        p.error("--stream-id must be 0-255")
 
     try:
-        run(dests, args.src_ip)
+        run(dests, args.src_ip, args.stream_id)
     except KeyboardInterrupt:
         pass
 

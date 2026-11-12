@@ -52,7 +52,7 @@ https://github.com/paskateknikko/ReaTC/raw/reapack/index.xml
 - **Source priority system** — each source configurable as High/Normal/Low priority with automatic failover
 
 ### Timecode Outputs
-- **Art-Net TimeCode** — broadcasts SMPTE TC over UDP (port 6454); unicast or broadcast; configurable IP
+- **Art-Net TimeCode** — broadcasts SMPTE TC over UDP (port 6454); unicast or broadcast; configurable IP and Art-Net 4 Stream ID
 - **MIDI Timecode (MTC)** — sample-accurate quarter-frame generator via JSFX; no external MIDI library required
 - **OSC** — broadcasts SMPTE TC as raw OSC (`/tc ,iiiii H M S F type`) at ~30 fps; configurable destination IP, port, and address
 - **LTC audio generator** — encodes timecode to LTC audio with slew-rate shaping matching REAPER's native LTC waveform
@@ -139,7 +139,8 @@ In the JSFX plugin UI, enable the outputs you need:
 
 1. Run the ReaTC script and open **Settings**
 2. Set the **destination IP** (e.g., `2.0.0.1` for Art-Net unicast, or `2.255.255.255` for broadcast)
-3. Enable **Art-Net Output** — packets send whenever valid TC is present
+3. Optionally set the **Stream ID** (0-255, default `0` = master) if the receiver listens to a specific Art-Net 4 timecode stream
+4. Enable **Art-Net Output** — packets send whenever valid TC is present
 
 ### OSC Timecode Output
 

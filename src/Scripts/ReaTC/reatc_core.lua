@@ -97,6 +97,7 @@ M.state = {
   dest_ip               = "2.0.0.1",
   artnet_preferred_ip   = "",  -- CIDR (e.g. "10.0.0.0/8") or "" = auto
   artnet_preferred_iface = "",  -- explicit NIC name override, "" = none
+  artnet_stream_id      = 0,   -- Art-Net 4 timecode Stream ID (0-255, 0 = master)
   framerate_type        = M.FR_EBU,
   packets_sent          = 0,
   artnet_error          = nil,
@@ -430,6 +431,7 @@ local SK = {
   ARTNET_ENABLED         = "artnet_enabled",
   ARTNET_PREFERRED_IP    = "artnet_preferred_ip",
   ARTNET_PREFERRED_IFACE = "artnet_preferred_iface",
+  ARTNET_STREAM_ID       = "artnet_stream_id",
   OSC_ENABLED            = "osc_enabled",
   OSC_IP                 = "osc_ip",
   OSC_PORT               = "osc_port",
@@ -463,6 +465,8 @@ function M.load_settings()
   s.artnet_preferred_ip    = (loaded_artnet_cidr and M.is_valid_cidr(loaded_artnet_cidr))
                              and loaded_artnet_cidr or ""
   s.artnet_preferred_iface = gets(SK.ARTNET_PREFERRED_IFACE) or ""
+  local loaded_stream = math.floor(tonumber(gets(SK.ARTNET_STREAM_ID)) or 0)
+  s.artnet_stream_id = (loaded_stream >= 0 and loaded_stream <= 255) and loaded_stream or 0
   s.osc_enabled    = gets(SK.OSC_ENABLED) == "true"
   local loaded_osc_ip = gets(SK.OSC_IP)
   s.osc_ip         = (loaded_osc_ip and M.is_valid_ipv4(loaded_osc_ip)) and loaded_osc_ip or s.osc_ip
@@ -501,6 +505,7 @@ function M.save_settings()
   sets(SK.ARTNET_ENABLED,         s.artnet_enabled)
   sets(SK.ARTNET_PREFERRED_IP,    s.artnet_preferred_ip)
   sets(SK.ARTNET_PREFERRED_IFACE, s.artnet_preferred_iface)
+  sets(SK.ARTNET_STREAM_ID,       s.artnet_stream_id)
   sets(SK.OSC_ENABLED,            s.osc_enabled)
   sets(SK.OSC_IP,                 s.osc_ip)
   sets(SK.OSC_PORT,               s.osc_port)

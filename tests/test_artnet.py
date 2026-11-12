@@ -62,3 +62,22 @@ class TestBuildArtnetTimecode:
         """Values are masked to 0xFF (overflow protection)."""
         pkt = build_artnet_timecode(256, 0, 0, 0, 0)
         assert pkt[17] == 0  # 256 & 0xFF == 0
+
+    def test_stream_id_default(self):
+        """Stream ID defaults to 0 (master) at byte 13; Filler1 stays 0."""
+        pkt = build_artnet_timecode(1, 2, 3, 4, 1)
+        assert pkt[12] == 0
+        assert pkt[13] == 0
+
+    def test_stream_id(self):
+        """Stream ID is written to byte 13 without disturbing TC fields."""
+        pkt = build_artnet_timecode(1, 2, 3, 4, 1, stream_id=7)
+        assert len(pkt) == 19
+        assert pkt[12] == 0
+        assert pkt[13] == 7
+        assert pkt[14:19] == bytes((4, 3, 2, 1, 1))
+
+    def test_stream_id_masking(self):
+        """Stream ID is masked to one byte."""
+        pkt = build_artnet_timecode(0, 0, 0, 0, 0, stream_id=257)
+        assert pkt[13] == 1

@@ -115,6 +115,7 @@ return function(core)
     local bind_ip = core.resolve_bind_ip(s.artnet_preferred_ip, s.artnet_preferred_iface)
     local src = bind_ip and (' --src-ip "' .. bind_ip .. '"') or ""
     local cmd = q .. ' "' .. core.py_artnet .. '" "' .. s.dest_ip .. '"' .. src
+                .. ' --stream-id ' .. math.floor(s.artnet_stream_id)
                 .. ' ' .. core.dev_null
     s.artnet_proc = io.popen(cmd, "w")
     if not s.artnet_proc then

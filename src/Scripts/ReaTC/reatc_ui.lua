@@ -255,6 +255,23 @@ return function(core, outputs)
         "(e.g. 192.168.0.50, 192.168.0.51).")
     end
 
+    ImGui.SetNextItemWidth(ctx, 100)
+    local sid_changed, new_sid = ImGui.InputInt(ctx, 'Stream ID##artnet', s.artnet_stream_id)
+    if sid_changed then
+      new_sid = math.max(0, math.min(255, new_sid))
+      if new_sid ~= s.artnet_stream_id then
+        s.artnet_stream_id = new_sid
+        core.save_settings()
+        if s.artnet_enabled then outputs.stop_artnet_daemon() end
+      end
+    end
+    if ImGui.IsItemHovered(ctx) then
+      ImGui.SetTooltip(ctx,
+        "Art-Net 4 timecode Stream ID (0-255).\n" ..
+        "0 = master stream. Use different IDs to send\n" ..
+        "several independent timecode streams.")
+    end
+
     preferred_ip_block('artnet', s.artnet_preferred_ip, s.artnet_preferred_iface,
       function(new_ip, new_iface)
         local changed = (new_ip ~= s.artnet_preferred_ip)
