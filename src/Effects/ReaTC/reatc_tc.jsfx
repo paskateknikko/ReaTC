@@ -1262,7 +1262,10 @@ tiny_mode ? (
 // Region name line under the TC (larger layouts only, Timeline in RGN mode).
 // The name comes from the script and is only shown while it matches the
 // region the JSFX is currently in, so a stale name never flashes up.
+// Only the TC drawing height (tc_draw_h) shrinks; tc_area_h still positions
+// the info bar, so the name sits between the TC and the info bar.
 rgn_name_show = 0;
+tc_draw_h = tc_area_h;
 !tiny_mode && tc_area_h >= 90 && tl_region_mode && active_source == SRC_TIMELINE &&
   tl_region > 0 && gmem[RGN_NAME_NUM] == tl_region && gmem[RGN_NAME_LEN] > 0 ? (
   strcpy(#rgn_name, "");
@@ -1273,7 +1276,7 @@ rgn_name_show = 0;
     rgn_i += 1;
   );
   rgn_name_show = 1;
-  tc_area_h -= 22;
+  tc_draw_h = tc_area_h - 24;
 );
 
 // TC color based on active source
@@ -1324,14 +1327,14 @@ fps_type == 2 ? (
 // Dynamic font sizing
 tc_avail_w = panel_w - (tiny_mode ? 4 : 24);
 tc_font = floor(tc_avail_w / 7);
-tc_font_h = floor(tc_area_h * 0.75);
+tc_font_h = floor(tc_draw_h * 0.75);
 tc_font = min(tc_font, tc_font_h);
 tc_font < 10 ? tc_font = 10;
 
 gfx_setfont(1, "Courier New", tc_font, 'b');
 gfx_measurestr(#tc_str, tcw, tch);
 gfx_x = panel_x + (panel_w - tcw) / 2;
-gfx_y = tc_area_y + tc_nudge + (tc_area_h - tc_nudge - tch) / 2;
+gfx_y = tc_area_y + tc_nudge + (tc_draw_h - tc_nudge - tch) / 2;
 gfx_drawstr(#tc_str);
 
 rgn_name_show ? (
@@ -1354,7 +1357,7 @@ rgn_name_show ? (
   );
   rgn_trunc ? strcpy(#rgn_name, #rgn_disp);
   gfx_x = panel_x + (panel_w - rgn_nw) / 2;
-  gfx_y = tc_area_y + tc_area_h + 2;
+  gfx_y = tc_area_y + tc_draw_h + 2;
   gfx_drawstr(#rgn_name);
 );
 
