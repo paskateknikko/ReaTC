@@ -35,17 +35,17 @@ flowchart TD
             GMEM_READ["gmem read"]:::script
             UI["🖥️ UI · ReaImGui"]:::script
             GMEM_READ --> UI
-
-            subgraph DAEMONS ["Python Daemons · stdin"]
-                direction LR
-                ARTNET_PY["reatc_artnet.py"]:::daemon
-                OSC_PY["reatc_osc.py"]:::daemon
-            end
-
-            GMEM_READ --> DAEMONS
         end
 
-        CPP_EXT["🔌 C++ Extension\nreaper_reatc"]:::extension
+        subgraph CPP_EXT ["🔌 C++ Extension · reaper_reatc"]
+            direction LR
+            FRAME_CLOCK["Frame clock\n(sender thread)"]:::extension
+            ARTNET_TX["Art-Net TimeCode"]:::extension
+            OSC_TX["OSC"]:::extension
+            FRAME_CLOCK --> ARTNET_TX
+            FRAME_CLOCK --> OSC_TX
+        end
+        GMEM_READ -- "ReaScript API\nReaTC_SetTC (per defer)" --> CPP_EXT
         CPP_EXT -- "ExtState\nReaTC_CMD" --> LUA
         LUA -- "ExtState\nReaTC_STATE" --> CPP_EXT
 
@@ -75,8 +75,8 @@ flowchart TD
         end
     end
 
-    ARTNET_PY -- "UDP 6454" --> ARTNET_IN
-    OSC_PY -- "UDP" --> OSC_IN
+    ARTNET_TX -- "UDP 6454" --> ARTNET_IN
+    OSC_TX -- "UDP" --> OSC_IN
     PHY_OUT --> LTC_IN
     MIDI_OUT --> MTC_IN
     LTCGEN_PY -- "WAV file" --> LTC_IN

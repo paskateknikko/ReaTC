@@ -88,10 +88,7 @@ def verify(version="DEV"):
         f"{scripts_dir}/reatc_outputs.lua": version,
         f"{scripts_dir}/reatc_ui.lua": version,
         f"{scripts_dir}/reatc_regions_to_ltc.lua": version,
-        f"{scripts_dir}/reatc_artnet.py": version,
-        f"{scripts_dir}/reatc_osc.py": version,
         f"{scripts_dir}/reatc_ltcgen.py": version,
-        f"{scripts_dir}/reatc_netdiscover.py": version,
         f"{effects_dir}/reatc_tc.jsfx": version,
     }
 

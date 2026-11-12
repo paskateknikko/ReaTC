@@ -24,12 +24,17 @@ M.FR_NAMES = { "24fps (Film)", "25fps (EBU)", "29.97DF", "30fps (SMPTE)" }
 M.FPS_VAL  = { 24, 25, 29.97, 30 }  -- index 1..4
 M.FPS_INT  = { 24, 25, 30,    30 }  -- integer frame count
 
-M.PYTHON_CANDIDATES = {
+M.PYTHON_CANDIDATES_UNIX = {
   "python3", "python",
   "/usr/bin/python3",
   "/usr/local/bin/python3",
   "/opt/homebrew/bin/python3",  -- macOS ARM (Homebrew)
-  "py",                         -- Windows Python Launcher (recommended)
+}
+
+-- Windows: "python3" is usually the Microsoft Store alias stub (prints
+-- "Python was not found"), so it is tried last. "py" is the Python Launcher.
+M.PYTHON_CANDIDATES_WIN = {
+  "python", "py", "python3",
   "C:\\Python313\\python.exe",
   "C:\\Python312\\python.exe",
   "C:\\Python311\\python.exe",
@@ -44,12 +49,52 @@ do
   M.script_path = info.source:match("@(.+[\\/])") or ""
 end
 
-M.py_artnet       = M.script_path .. "reatc_artnet.py"
-M.py_osc          = M.script_path .. "reatc_osc.py"
-M.py_netdiscover  = M.script_path .. "reatc_netdiscover.py"
-
 M.is_win = reaper.GetOS():find("Win") ~= nil
 M.dev_null = M.is_win and "2>NUL" or "2>/dev/null"
+M.PYTHON_CANDIDATES = M.is_win and M.PYTHON_CANDIDATES_WIN or M.PYTHON_CANDIDATES_UNIX
+
+--- Quote a program path for a command line.
+-- On Windows only paths containing spaces are quoted: bare names like
+-- "python" must stay unquoted so PATH lookup works in every launcher.
+-- @param bin string program name or path
+-- @return string
+function M.quote_bin(bin)
+  if M.is_win and not bin:find(" ", 1, true) then return bin end
+  return '"' .. bin .. '"'
+end
+
+--- True if the ReaTC C++ extension (network output API) is loaded.
+-- @return boolean
+function M.ext_loaded()
+  return reaper.ReaTC_SetTC ~= nil
+end
+
+--- Version string reported by the extension, or nil if it is not loaded.
+-- @return string|nil
+function M.ext_version()
+  return reaper.ReaTC_GetVersion and reaper.ReaTC_GetVersion() or nil
+end
+
+--- Run a short command and capture its stdout.
+-- Windows uses reaper.ExecProcess (no cmd.exe, no console window, ~50 ms);
+-- other platforms use io.popen with stderr discarded.
+-- @param cmd string command line (no shell redirections)
+-- @param timeout_ms number|nil Windows timeout (default 5000)
+-- @return string|nil stdout, or nil if the process failed
+function M.exec_capture(cmd, timeout_ms)
+  if M.is_win then
+    local res = reaper.ExecProcess(cmd, timeout_ms or 5000)
+    if not res then return nil end
+    local code, out = res:match("^(%-?%d+)\r?\n(.*)$")
+    if code ~= "0" then return nil end
+    return out
+  end
+  local h = io.popen(cmd .. " " .. M.dev_null, "r")
+  if not h then return nil end
+  local out = h:read("*a")
+  h:close()
+  return out
+end
 
 -- Source IDs (matching JSFX active_source values)
 M.SRC_NONE     = 0
@@ -68,6 +113,8 @@ M.GMEM_TC_FRAMERATE    = 4
 M.GMEM_TC_VALID        = 6
 M.GMEM_TC_WRITE_COUNTER = 7
 M.GMEM_SCRIPT_ALIVE    = 8
+M.GMEM_FRAME_TIME      = 9   -- time_precise() when the current frame started
+M.GMEM_TC_RUNNING      = 10  -- 1 while output TC is advancing
 M.GMEM_ACTIVE_SOURCE   = 17
 M.GMEM_TC_OFFSET_H     = 20
 M.GMEM_TC_OFFSET_M     = 21
@@ -91,13 +138,8 @@ M.RGN_NAME_MAX         = 64   -- must match RGN_NAME_MAX in reatc_tc.jsfx
 
 -- State
 M.state = {
-  -- Python
-  python_bin   = nil,
-  python_error = nil,
-
   -- Art-Net
   artnet_enabled        = false,
-  artnet_proc           = nil,
   dest_ip               = "2.0.0.1",
   artnet_preferred_ip   = "",  -- CIDR (e.g. "10.0.0.0/8") or "" = auto
   artnet_preferred_iface = "",  -- explicit NIC name override, "" = none
@@ -105,7 +147,7 @@ M.state = {
   framerate_type        = M.FR_EBU,
   packets_sent          = 0,
   artnet_error          = nil,
-  last_artnet_time      = 0,
+  artnet_warning        = nil,  -- e.g. source IP bind failed (default route used)
 
   -- OSC
   osc_enabled          = false,
@@ -114,9 +156,8 @@ M.state = {
   osc_address          = "/tc",
   osc_preferred_ip     = "",
   osc_preferred_iface  = "",
-  osc_proc             = nil,
   osc_error            = nil,
-  last_osc_time        = 0,
+  osc_warning          = nil,
   osc_packets_sent     = 0,
 
   -- Network interface discovery (populated lazily by list_interfaces())
@@ -125,12 +166,17 @@ M.state = {
   -- Active TC (read from gmem, written by JSFX)
   tc_h = 0, tc_m = 0, tc_s = 0, tc_f = 0,
   tc_valid       = false,
+  tc_running     = false,  -- TC advancing (extension sends every frame itself)
+  tc_frame_time  = 0,      -- time_precise() when the current frame started
   active_source  = 0,  -- SRC_NONE/LTC/MTC/TIMELINE
 
   -- JSFX detection
   jsfx_detected     = false,
   last_write_counter = -1,
   jsfx_stale_count   = 0,
+  jsfx_idle          = false,  -- JSFX not processing (transport stopped)
+  jsfx_scan_time     = nil,    -- last jsfx_in_project() scan
+  jsfx_scan_found    = false,
 
   -- TC Offset
   tc_offset_h        = 0,
@@ -165,19 +211,22 @@ M.state = {
 -- @return string|nil Python binary path, or nil if not found
 function M.find_python()
   for _, cmd in ipairs(M.PYTHON_CANDIDATES) do
-    local quoted = M.is_win and ('"' .. cmd .. '"') or cmd
-    local h = io.popen(quoted .. ' --version 2>&1')
-    if h then
-      local out = h:read("*a"); h:close()
-      if out and out:match("Python 3") then return cmd end
+    local out
+    if M.is_win then
+      out = M.exec_capture(M.quote_bin(cmd) .. " --version", 3000)
+    else
+      local h = io.popen(cmd .. ' --version 2>&1')
+      if h then out = h:read("*a"); h:close() end
     end
+    if out and out:match("Python 3") then return cmd end
   end
   return nil
 end
 
 --- Read active timecode from gmem shared memory (written by the JSFX).
--- Updates `state.tc_h/m/s/f`, `state.tc_valid`, `state.active_source`,
--- `state.framerate_type`, and `state.jsfx_detected`.
+-- Updates `state.tc_h/m/s/f`, `state.tc_valid`, `state.tc_running`,
+-- `state.tc_frame_time`, `state.active_source`, `state.framerate_type`,
+-- and `state.jsfx_detected`.
 function M.update_tc_from_gmem()
   local s = M.state
   s.tc_h = math.floor(reaper.gmem_read(M.GMEM_TC_HOUR))
@@ -186,6 +235,8 @@ function M.update_tc_from_gmem()
   s.tc_f = math.floor(reaper.gmem_read(M.GMEM_TC_FRAME))
   s.framerate_type = math.floor(reaper.gmem_read(M.GMEM_TC_FRAMERATE))
   s.tc_valid = reaper.gmem_read(M.GMEM_TC_VALID) > 0.5
+  s.tc_running = s.tc_valid and reaper.gmem_read(M.GMEM_TC_RUNNING) > 0.5
+  s.tc_frame_time = reaper.gmem_read(M.GMEM_FRAME_TIME)
   s.active_source = math.floor(reaper.gmem_read(M.GMEM_ACTIVE_SOURCE))
 
   -- JSFX detection: TC_WRITE_COUNTER increments every @block
@@ -194,12 +245,51 @@ function M.update_tc_from_gmem()
     s.last_write_counter = wc
     s.jsfx_stale_count = 0
     s.jsfx_detected = true
+    s.jsfx_idle = false
   else
     s.jsfx_stale_count = s.jsfx_stale_count + 1
+    -- REAPER stops running FX on tracks that are not record-armed while the
+    -- transport is stopped/paused, so @block (and every gmem write) freezes
+    -- with the last values from playback. A few silent defer cycles = idle.
+    s.jsfx_idle = s.jsfx_stale_count > 3
     if s.jsfx_stale_count > 30 then  -- ~1 second at 30 fps defer
-      s.jsfx_detected = false
+      -- Idle is fine as long as the JSFX is still in the project.
+      s.jsfx_detected = M.jsfx_in_project()
     end
   end
+  -- Frozen gmem still says "running": TC is not advancing while idle.
+  if s.jsfx_idle then s.tc_running = false end
+end
+
+--- Is an enabled ReaTC Timecode Converter JSFX on any track (incl. master)?
+-- Scans at most once per second; used only while the JSFX is idle.
+-- @return boolean
+function M.jsfx_in_project()
+  local s = M.state
+  local now = reaper.time_precise()
+  if s.jsfx_scan_time and now - s.jsfx_scan_time < 1.0 then
+    return s.jsfx_scan_found
+  end
+  s.jsfx_scan_time = now
+
+  local function is_reatc(track, fx)
+    if not reaper.TrackFX_GetEnabled(track, fx) then return false end
+    local ok, ident = reaper.TrackFX_GetNamedConfigParm(track, fx, "fx_ident")
+    if ok and ident:lower():find("reatc_tc%.jsfx") then return true end
+    local _, name = reaper.TrackFX_GetFXName(track, fx, "")
+    return name:find("ReaTC Timecode Converter", 1, true) ~= nil
+  end
+
+  local found = false
+  for i = -1, reaper.CountTracks(0) - 1 do
+    local tr = (i < 0) and reaper.GetMasterTrack(0) or reaper.GetTrack(0, i)
+    for j = 0, reaper.TrackFX_GetCount(tr) - 1 do
+      if is_reatc(tr, j) then found = true; break end
+    end
+    if found then break end
+  end
+  s.jsfx_scan_found = found
+  return found
 end
 
 --- Get the current active timecode values.
@@ -244,8 +334,8 @@ function M.is_valid_ipv4_list(list)
   return count > 0
 end
 
---- List local IPv4 interfaces by invoking reatc_netdiscover.py.
--- Output is tab-separated (iface names can contain spaces: "Wi-Fi 2").
+--- List local IPv4 interfaces via the extension (ReaTC_ListInterfaces).
+-- Rows are tab-separated (iface names can contain spaces: "Wi-Fi 2").
 -- Caches the result in `state.interfaces`. Pass `force = true` to refresh.
 -- @param force boolean re-run discovery even if cached
 -- @return table array of { ip, iface, broadcast, netmask } (possibly empty)
@@ -253,14 +343,9 @@ function M.list_interfaces(force)
   local s = M.state
   if s.interfaces and not force then return s.interfaces end
   s.interfaces = {}
-  if not s.python_bin then return s.interfaces end
+  if not reaper.ReaTC_ListInterfaces then return s.interfaces end
 
-  local q = M.is_win and ('"' .. s.python_bin .. '"') or s.python_bin
-  local cmd = q .. ' "' .. M.py_netdiscover .. '" ' .. M.dev_null
-  local h = io.popen(cmd, "r")
-  if not h then return s.interfaces end
-  local out = h:read("*a") or ""
-  h:close()
+  local out = reaper.ReaTC_ListInterfaces() or ""
 
   for line in out:gmatch("[^\r\n]+") do
     local ip, iface, bcast, mask = line:match("^([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)$")
@@ -348,6 +433,43 @@ function M.resolve_bind_ip(preferred_ip, preferred_iface)
   end
 
   return nil, nil
+end
+
+--- Warn when a destination looks like a broadcast address but is not one.
+-- "x.y.z.255" is only a broadcast on a /24. On e.g. a /8 it is an ordinary
+-- host address: the OS ARPs for it, nothing answers, and packets are dropped.
+-- The destination is judged against the bound interface (Preferred IP /
+-- Interface) or, when Auto, against any local interface whose subnet holds it.
+-- @param dest_list string single IPv4 or comma-separated list
+-- @param preferred_ip string CIDR or IP (or "")
+-- @param preferred_iface string interface name (or "")
+-- @return string|nil warning text, or nil when every destination looks fine
+function M.broadcast_warning(dest_list, preferred_ip, preferred_iface)
+  if not dest_list or dest_list == "" then return nil end
+  local ifaces = M.list_interfaces()
+  local bound_ip = M.resolve_bind_ip(preferred_ip, preferred_iface)
+
+  for item in dest_list:gmatch("[^,]+") do
+    local dest = item:gsub("^%s+", ""):gsub("%s+$", "")
+    local d = ipv4_to_int(dest)
+    if d and (d & 0xFF) == 0xFF and dest ~= "255.255.255.255" then
+      for _, it in ipairs(ifaces) do
+        local ip, mask = ipv4_to_int(it.ip), ipv4_to_int(it.netmask)
+        local relevant = (bound_ip == nil) or (it.ip == bound_ip)
+        if relevant and ip and mask and (ip & mask) == (d & mask) then
+          if dest ~= it.broadcast then
+            return string.format(
+              "%s is not a broadcast address on %s (%s, mask %s) and will not be delivered. "
+              .. "Use the device IP%s.",
+              dest, it.iface, it.ip, it.netmask,
+              it.broadcast and (" or broadcast " .. it.broadcast) or "")
+          end
+          break
+        end
+      end
+    end
+  end
+  return nil
 end
 
 --- Exchange region timeline state with the JSFX via gmem.

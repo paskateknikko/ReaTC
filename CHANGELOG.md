@@ -14,6 +14,30 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 
 ## [Unreleased]
 
+### Changed
+
+- **Art-Net and OSC are sent natively by the ReaTC extension** — the C++ extension now exports a ReaScript API (`ReaTC_SetTC`, `ReaTC_SetArtNetOutput`, `ReaTC_SetOSCOutput`, `ReaTC_GetPacketCount`, `ReaTC_GetLastError`, `ReaTC_GetLastWarning`, `ReaTC_ListInterfaces`, `ReaTC_GetVersion`) and sends UDP directly from REAPER. No Python, no subprocesses, no console windows; settings changes apply on the next packet. The extension is now **required** for network output — the UI shows "ReaTC extension not loaded" without it, and warns when the extension and script versions differ
+- **Python is only needed for Bake LTC** — the main script no longer looks for Python at startup
+- **Interface list** shows only adapters that are up
+
+### Removed
+
+- `reatc_artnet.py`, `reatc_osc.py`, `reatc_netdiscover.py` Python daemons (packet tests ported to C++: `src/extension/tests/test_packets.cpp`, run in CI)
+
+### Added
+
+- **Fake-broadcast warning** — Art-Net and OSC settings warn when a destination looks like a broadcast (`x.y.z.255`) but is not the broadcast address of the bound / matching interface (e.g. `10.101.6.255` on a `/8` network), since such packets are silently dropped
+
+### Fixed
+
+- **Windows: Art-Net / OSC output never started** — `cmd.exe` quote stripping mangled the daemon command line; the UI showed "Running" with 0 packets sent
+- **Windows: Interface list empty** — network interface discovery failed for the same reason; it now runs via `reaper.ExecProcess`
+- **Windows: Bake LTC failed** — LTC generation used the same broken quoting; now runs via `reaper.ExecProcess`, and the output folder is created with `RecursiveCreateDirectory`
+- **Windows: slow script start and console popups** — Python detection now uses `reaper.ExecProcess` (no console window, ~50 ms instead of ~6 s), tries `python` / `py` before the Microsoft Store `python3` stub, and no longer probes Unix paths
+- **Daemon restarts while typing** — editing an IP, port, address, Stream ID or interface restarts the daemon once, 0.75 s after the last change, instead of on every keystroke
+- **Art-Net / OSC skipped every other frame** — packets were sent from the ~30 Hz script loop with a one-frame throttle, so at 25 fps they went out every ~60 ms (16–17 per second). The extension now sends from its own thread, one packet per frame on the frame boundary, phase-locked to the JSFX (exact sub-frame phase for the Timeline source). While paused nothing is sent (a locate while stopped sends the new frame once)
+- **macOS: deployment target ignored** — `CMAKE_OSX_DEPLOYMENT_TARGET` was set after `project()`, so the extension required the build machine's macOS version instead of 10.15 (Intel) / 11.0 (Apple Silicon)
+
 ## [1.3.0-beta-2] - 2026-11-12
 
 ### Added

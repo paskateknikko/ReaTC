@@ -74,6 +74,40 @@ return function(core, outputs)
   -- @param pref_ip string current CIDR ("" = none)
   -- @param pref_iface string current interface override ("" = Auto)
   -- @param on_change function(new_ip, new_iface) called on any change
+  --- Status line under an output's settings: missing extension / error /
+  -- waiting for TC / sending, plus an optional bind warning.
+  -- @param enabled boolean output switched on
+  -- @param err string|nil last send error
+  -- @param warn string|nil bind warning (default route used)
+  -- @param sending_text string text shown while sending
+  local function output_status(enabled, err, warn, sending_text)
+    if not core.ext_loaded() then
+      ImGui.TextColored(ctx, C.red, outputs.EXT_MISSING)
+    elseif not enabled then
+      return
+    elseif err then
+      ImGui.TextColored(ctx, C.red, "Error: " .. trunc(err, 70))
+    elseif not s.tc_valid then
+      ImGui.TextColored(ctx, C.orange, "Waiting for valid TC")
+    else
+      ImGui.TextColored(ctx, C.green, sending_text)
+    end
+    if enabled and warn and not err then
+      ImGui.TextColored(ctx, C.orange, "Warning: " .. trunc(warn, 70))
+    end
+  end
+
+  --- Show an orange wrapped warning if a destination is a fake broadcast
+  -- address (e.g. x.y.z.255 on a /8 network). See core.broadcast_warning.
+  local function broadcast_hint(dest, pref_ip, pref_iface)
+    local warn = core.broadcast_warning(dest, pref_ip, pref_iface)
+    if warn then
+      ImGui.PushStyleColor(ctx, ImGui.Col_Text, C.orange)
+      ImGui.TextWrapped(ctx, warn)
+      ImGui.PopStyleColor(ctx)
+    end
+  end
+
   local function preferred_ip_block(id, pref_ip, pref_iface, on_change)
     ImGui.SetNextItemWidth(ctx, 180)
     local ip_changed, new_ip = ImGui.InputText(ctx, 'Preferred IP##' .. id, pref_ip)
@@ -197,16 +231,26 @@ return function(core, outputs)
         "JSFX not detected \u{2014} add ReaTC Timecode Converter to any track")
     end
 
+    -- Extension check (Art-Net / OSC are sent by the C++ extension)
+    local ext_ver = core.ext_version()
+    if not ext_ver then
+      ImGui.TextColored(ctx, C.red, outputs.EXT_MISSING)
+    elseif ext_ver ~= core.VERSION and ext_ver ~= "DEV" and core.VERSION ~= "DEV" then
+      ImGui.TextColored(ctx, C.orange, string.format(
+        "Extension v%s \u{2260} script v%s \u{2014} restart REAPER after updating",
+        ext_ver, core.VERSION))
+    end
+
     -- Output toggle buttons
     if output_toggle('Art-Net', s.artnet_enabled, s.artnet_error) then
       s.artnet_enabled = not s.artnet_enabled
-      if s.artnet_enabled then s.packets_sent = 0 else outputs.stop_artnet_daemon() end
+      outputs.reset_artnet()
       core.save_settings()
     end
     ImGui.SameLine(ctx, 0, 16)
     if output_toggle('OSC', s.osc_enabled, s.osc_error) then
       s.osc_enabled = not s.osc_enabled
-      if s.osc_enabled then s.osc_packets_sent = 0 else outputs.stop_osc_daemon() end
+      outputs.reset_osc()
       core.save_settings()
     end
 
@@ -234,7 +278,7 @@ return function(core, outputs)
     local an_changed, an_val = ImGui.Checkbox(ctx, 'Enable##artnet', s.artnet_enabled)
     if an_changed then
       s.artnet_enabled = an_val
-      if an_val then s.packets_sent = 0 else outputs.stop_artnet_daemon() end
+      outputs.reset_artnet()
       core.save_settings()
     end
 
@@ -245,9 +289,6 @@ return function(core, outputs)
       if core.is_valid_ipv4_list(new_ip) then
         s.dest_ip = new_ip
         core.save_settings()
-        if s.artnet_enabled then
-          outputs.stop_artnet_daemon()
-        end
       elseif new_ip ~= "" then
         ImGui.TextColored(ctx, C.red, "Invalid: use aaa.bbb.ccc.ddd, comma-separated for multi-unicast")
       end
@@ -258,6 +299,7 @@ return function(core, outputs)
         "or a comma-separated list for multi-unicast\n" ..
         "(e.g. 192.168.0.50, 192.168.0.51).")
     end
+    broadcast_hint(s.dest_ip, s.artnet_preferred_ip, s.artnet_preferred_iface)
 
     ImGui.SetNextItemWidth(ctx, 80)
     -- step = 0 hides the +/- buttons (plain numeric field, like OSC Port)
@@ -267,7 +309,6 @@ return function(core, outputs)
       if new_sid ~= s.artnet_stream_id then
         s.artnet_stream_id = new_sid
         core.save_settings()
-        if s.artnet_enabled then outputs.stop_artnet_daemon() end
       end
     end
     if ImGui.IsItemHovered(ctx) then
@@ -285,22 +326,11 @@ return function(core, outputs)
           s.artnet_preferred_ip    = new_ip
           s.artnet_preferred_iface = new_iface
           core.save_settings()
-          if s.artnet_enabled then outputs.stop_artnet_daemon() end
         end
       end)
 
-    if s.artnet_error then
-      ImGui.TextColored(ctx, C.red, "Error: " .. trunc(s.artnet_error, 60))
-    elseif s.artnet_enabled and s.artnet_proc then
-      ImGui.TextColored(ctx, C.green,
-        string.format("Running \u{2014} %d packets sent", s.packets_sent))
-    elseif s.artnet_enabled and not s.tc_valid then
-      ImGui.TextColored(ctx, C.orange, "Waiting for valid TC")
-    elseif s.python_bin then
-      ImGui.TextColored(ctx, C.dim, "Python: " .. trunc(s.python_bin, 50))
-    else
-      ImGui.TextColored(ctx, C.red, "Python 3 not found!")
-    end
+    output_status(s.artnet_enabled, s.artnet_error, s.artnet_warning,
+      string.format("Sending \u{2014} %d packets", s.packets_sent))
 
     -- ── OSC ──────────────────────────────────────────────────────────────────
     ImGui.SeparatorText(ctx, 'OSC Output')
@@ -311,7 +341,7 @@ return function(core, outputs)
     local osc_changed, osc_val = ImGui.Checkbox(ctx, 'Enable##osc', s.osc_enabled)
     if osc_changed then
       s.osc_enabled = osc_val
-      if osc_val then s.osc_packets_sent = 0 else outputs.stop_osc_daemon() end
+      outputs.reset_osc()
       core.save_settings()
     end
 
@@ -322,11 +352,11 @@ return function(core, outputs)
       if core.is_valid_ipv4(new_osc_ip) then
         s.osc_ip = new_osc_ip
         core.save_settings()
-        if s.osc_enabled then outputs.stop_osc_daemon() end
       elseif new_osc_ip ~= "" then
         ImGui.TextColored(ctx, C.red, "Invalid IP: must be aaa.bbb.ccc.ddd (0-255 each)")
       end
     end
+    broadcast_hint(s.osc_ip, s.osc_preferred_ip, s.osc_preferred_iface)
 
     ImGui.SetNextItemWidth(ctx, 80)
     local osc_port_str = tostring(s.osc_port)
@@ -337,7 +367,6 @@ return function(core, outputs)
       if p and p >= 1 and p <= 65535 then
         s.osc_port = math.floor(p)
         core.save_settings()
-        if s.osc_enabled then outputs.stop_osc_daemon() end
       end
     end
 
@@ -347,7 +376,6 @@ return function(core, outputs)
       if new_osc_addr:sub(1, 1) == "/" then
         s.osc_address = new_osc_addr
         core.save_settings()
-        if s.osc_enabled then outputs.stop_osc_daemon() end
       elseif new_osc_addr ~= "" then
         ImGui.TextColored(ctx, C.red, "OSC address must start with /")
       end
@@ -361,22 +389,12 @@ return function(core, outputs)
           s.osc_preferred_ip    = new_ip
           s.osc_preferred_iface = new_iface
           core.save_settings()
-          if s.osc_enabled then outputs.stop_osc_daemon() end
         end
       end)
 
-    if s.osc_error then
-      ImGui.TextColored(ctx, C.red, "Error: " .. trunc(s.osc_error, 60))
-    elseif s.osc_enabled and s.osc_proc then
-      ImGui.TextColored(ctx, C.green,
-        string.format("Running \u{2014} %d packets to %s:%d  %s",
-          s.osc_packets_sent, s.osc_ip, s.osc_port, s.osc_address))
-    elseif s.osc_enabled and not s.tc_valid then
-      ImGui.TextColored(ctx, C.orange, "Waiting for valid TC")
-    elseif s.osc_enabled then
-      ImGui.TextColored(ctx, C.dim,
-        string.format("Sending to %s:%d  %s", s.osc_ip, s.osc_port, s.osc_address))
-    end
+    output_status(s.osc_enabled, s.osc_error, s.osc_warning,
+      string.format("Sending \u{2014} %d packets to %s:%d  %s",
+        s.osc_packets_sent, s.osc_ip, s.osc_port, s.osc_address))
 
     -- ── Timecode ─────────────────────────────────────────────────────────────
     ImGui.SeparatorText(ctx, 'Timecode')

@@ -1,8 +1,4 @@
 cmake_minimum_required(VERSION 3.15)
-project(reaper_reatc LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Read deployment targets from shared config
 set(PLATFORMS_ENV "${CMAKE_CURRENT_SOURCE_DIR}/../../build/platforms.env")
@@ -23,12 +19,29 @@ if(NOT DEFINED WINDOWS_MIN_VERSION)
   set(WINDOWS_MIN_VERSION "10")
 endif()
 
-# Minimum macOS deployment target
-if(APPLE)
-  set(CMAKE_OSX_DEPLOYMENT_TARGET "${MACOS_DEPLOYMENT_TARGET}" CACHE STRING "Minimum macOS version")
-endif()
+# Minimum macOS deployment target. Must be set before project(): project()
+# creates an empty CMAKE_OSX_DEPLOYMENT_TARGET cache entry, after which a
+# set(... CACHE) is a no-op and the build targets the host macOS version.
+# Not FORCEd, so -DCMAKE_OSX_DEPLOYMENT_TARGET=... still overrides it.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "${MACOS_DEPLOYMENT_TARGET}" CACHE STRING "Minimum macOS version")
 
-add_library(reaper_reatc SHARED reaper_reatc.cpp)
+project(reaper_reatc LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_library(reaper_reatc SHARED reaper_reatc.cpp reatc_net.cpp reatc_output.cpp)
+
+find_package(Threads REQUIRED)
+target_link_libraries(reaper_reatc PRIVATE Threads::Threads)
+
+# Version reported by ReaTC_GetVersion() (CI passes the release tag)
+set(REATC_VERSION "DEV" CACHE STRING "ReaTC version string")
+target_compile_definitions(reaper_reatc PRIVATE REATC_VERSION="${REATC_VERSION}")
+
+if(WIN32)
+  target_link_libraries(reaper_reatc PRIVATE ws2_32 iphlpapi winmm)
+endif()
 
 # Windows minimum version → _WIN32_WINNT hex value
 if(WIN32)
@@ -64,4 +77,13 @@ if(NOT WIN32)
     CXX_VISIBILITY_PRESET hidden
     C_VISIBILITY_PRESET hidden
   )
+endif()
+
+# Unit tests for the packet builders (header-only, no REAPER needed)
+option(REATC_BUILD_TESTS "Build ReaTC extension unit tests" OFF)
+if(REATC_BUILD_TESTS)
+  enable_testing()
+  add_executable(reatc_tests tests/test_packets.cpp)
+  target_include_directories(reatc_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME reatc_tests COMMAND reatc_tests)
 endif()

@@ -229,13 +229,13 @@ local function generate_selected()
   local sep     = core.is_win and "\\" or "/"
   local ltc_dir = proj_path .. sep .. "ReaTC_LTC"
 
-  local mkdir_ok
-  if core.is_win then
-    mkdir_ok = os.execute('if not exist "' .. ltc_dir .. '" mkdir "' .. ltc_dir .. '"')
-  else
-    mkdir_ok = os.execute('mkdir -p "' .. ltc_dir .. '"')
-  end
-  if mkdir_ok == nil or mkdir_ok == false then
+  -- Built-in API: no shell, no console window on Windows. Its return value
+  -- does not distinguish "already exists", so verify by writing a probe file.
+  reaper.RecursiveCreateDirectory(ltc_dir, 0)
+  local probe_path = ltc_dir .. sep .. ".reatc_probe"
+  local probe = io.open(probe_path, "w")
+  if probe then probe:close(); os.remove(probe_path) end
+  if not probe then
     reaper.MB("Failed to create output directory:\n" .. ltc_dir,
       "ReaTC — Bake LTC", 0)
     return
@@ -247,7 +247,7 @@ local function generate_selected()
   local amplitude = dbfs_to_amplitude(state.level_dbfs)
   amplitude = math.max(1, math.min(32767, amplitude))
 
-  local q = core.is_win and ('"' .. python_bin .. '"') or python_bin
+  local q = core.quote_bin(python_bin)
 
   local track    = get_or_create_track(state.track_name)
   local ok_count = 0
@@ -277,14 +277,20 @@ local function generate_selected()
 
     local wav_path = ltc_dir .. sep .. safe_filename(fname) .. ".wav"
 
-    local cmd = string.format('%s "%s" %d %d %d %d %d %d %d "%s" %d %s',
+    local cmd = string.format('%s "%s" %d %d %d %d %d %d %d "%s" %d',
       q, py_ltcgen,
       fr_type, rgn.tc_h, rgn.tc_m, rgn.tc_s, rgn.tc_f,
       n_frames, sample_rate,
-      wav_path, amplitude,
-      core.dev_null)
+      wav_path, amplitude)
 
-    local gen_ok = os.execute(cmd)
+    local gen_ok
+    if core.is_win then
+      -- ExecProcess: no cmd.exe quoting pitfalls, no console window.
+      -- Timeout 0 = wait until done (long regions can take a while).
+      gen_ok = core.exec_capture(cmd, 0) ~= nil
+    else
+      gen_ok = os.execute(cmd .. " " .. core.dev_null)
+    end
     if gen_ok == nil or gen_ok == false then
       err_list[#err_list + 1] = fname .. " (generation failed)"
       goto continue_region

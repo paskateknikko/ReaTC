@@ -65,7 +65,7 @@ https://github.com/paskateknikko/ReaTC/raw/reapack/index.xml
 - **Network sync status** — Art-Net and OSC toggleable directly from the main window
 - **All standard frame rates** — 24fps (Film), 25fps (EBU/PAL), 29.97fps Drop Frame, 30fps (SMPTE)
 - **Dark UI** — unified dark style across Lua script and JSFX; scalable TC display
-- **Cross-platform** — macOS (10.15+) and Windows (10+); Python 3 standard library only
+- **Cross-platform** — macOS (10.15+) and Windows (10+); Art-Net / OSC sent natively by the ReaTC extension (no Python needed)
 - **ReaPack compatible** — install via package manager; ReaImGui auto-installed as dependency
 
 ## Use Cases
@@ -181,9 +181,13 @@ Add the **ReaTC LTC Diagnostics** JSFX to the same track (or any track receiving
 
 ## Troubleshooting
 
-**"Python 3 not found"**
+**"ReaTC extension not loaded"**
+- Art-Net and OSC are sent by the ReaTC C++ extension (`UserPlugins/reaper_reatc64.dll` on Windows, `reaper_reatc-*.dylib` on macOS). Reinstall ReaTC via ReaPack (or copy `UserPlugins/` from the release zip) and **restart REAPER** — extensions only load at startup.
+
+**"Python 3 not found" (Bake LTC only)**
+- Only the *Bake LTC from regions* tool uses Python.
 - macOS: Python 3 is pre-installed on macOS 12.3+. For older versions, install from [python.org](https://python.org).
-- Windows: Install from the Microsoft Store (`python3`) or [python.org](https://python.org). Make sure Python is added to your PATH. Restart REAPER after installing.
+- Windows: Install from [python.org](https://python.org) and make sure Python is added to your PATH. Restart REAPER after installing.
 
 **"JSFX not detected"**
 - Add the **ReaTC Timecode Converter** JSFX to any track (FX browser > search "ReaTC").
@@ -192,7 +196,7 @@ Add the **ReaTC LTC Diagnostics** JSFX to the same track (or any track receiving
 **No Art-Net packets being received**
 - Check the destination IP matches your console's Art-Net interface.
 - Verify your firewall allows outbound UDP on port 6454.
-- For broadcast, use the subnet broadcast address (e.g., `2.255.255.255`).
+- For broadcast, use the subnet broadcast address (e.g., `2.255.255.255`). `x.y.z.255` is only a broadcast on a `/24` network — ReaTC shows a warning when the address is not a broadcast for the selected interface.
 
 **No OSC messages being received**
 - Verify the destination IP, port, and OSC address match the target application's settings.
@@ -206,8 +210,8 @@ Add the **ReaTC LTC Diagnostics** JSFX to the same track (or any track receiving
 
 - **REAPER 6.32+** (required for `gmem_attach()` shared memory API)
 - **ReaImGui** (auto-installed via ReaPack)
-- **Python 3** (pre-installed on macOS; Microsoft Store or python.org on Windows)
-  No third-party Python packages required.
+- **ReaTC extension** (included; installed by ReaPack) — required for Art-Net and OSC output
+- **Python 3** — only for *Bake LTC from regions* (pre-installed on macOS; python.org on Windows). No third-party packages.
 
 ## License
 
