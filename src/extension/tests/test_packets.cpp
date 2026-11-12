@@ -203,23 +203,47 @@ static void test_clock()
     CHECK(d.send && d.frame == 5000);
   }
 
-  // Held (paused): repeat the same frame once per period
+  // Paused right after running: the paused frame was already sent -> silence
+  {
+    ClockState st;
+    run_clock(a, st, 10.0, 10.1);       // sent 1000..1002
+    TcAnchor held = a;
+    held.running = false;
+    held.frame = 1002;
+    held.start = 10.08;
+    const auto sent = run_clock(held, st, 10.1, 11.1);
+    CHECK(sent.empty());
+  }
+
+  // Held frame never sent before (e.g. script started while paused):
+  // sent once, then no repeats
   {
     ClockState st;
     TcAnchor held = a;
     held.running = false;
-    const auto sent = run_clock(held, st, 10.0, 10.18);
-    CHECK(sent.size() == 5);
-    bool same = true;
-    for (auto fr : sent) if (fr != 1000) same = false;
-    CHECK(same);
+    const auto sent = run_clock(held, st, 10.0, 11.0);
+    CHECK(sent.size() == 1 && sent[0] == 1000);
   }
 
-  // Stale anchor (no update for > MAX_EXTRAPOLATION): stop advancing
+  // Locate while paused: the new frame is sent once
   {
     ClockState st;
-    const ClockDecision d = clock_step(a, st, 10.0 + MAX_EXTRAPOLATION + 0.1);
-    CHECK(d.send && d.frame == 1000);
+    TcAnchor held = a;
+    held.running = false;
+    run_clock(held, st, 10.0, 10.5);
+    held.frame = 7000;
+    const auto sent = run_clock(held, st, 10.5, 11.5);
+    CHECK(sent.size() == 1 && sent[0] == 7000);
+  }
+
+  // Stale anchor (no update for > MAX_EXTRAPOLATION): stop advancing and go
+  // silent -- never step back to the old anchor frame
+  {
+    ClockState st;
+    run_clock(a, st, 10.0, 10.1);       // sent 1000..1002
+    const auto sent = run_clock(a, st, 10.0 + MAX_EXTRAPOLATION + 0.01,
+                                10.0 + MAX_EXTRAPOLATION + 1.0);
+    CHECK(sent.empty());
   }
 
   // Invalid: nothing sent; next valid frame is sent at once
@@ -236,8 +260,9 @@ static void test_clock()
     ClockState st;
     TcAnchor df = a;
     df.type = TC_2997DF;
-    const auto sent = run_clock(df, st, 10.0, 10.0 + 29.5 * 1001.0 / 30000.0);
-    CHECK(sent.size() == 30);
+    // Stay inside MAX_EXTRAPOLATION (real runs re-anchor ~30x per second)
+    const auto sent = run_clock(df, st, 10.0, 10.0 + 14.5 * 1001.0 / 30000.0);
+    CHECK(sent.size() == 15);
   }
 }
 

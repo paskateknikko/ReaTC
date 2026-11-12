@@ -35,7 +35,7 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 - **Windows: Bake LTC failed** — LTC generation used the same broken quoting; now runs via `reaper.ExecProcess`, and the output folder is created with `RecursiveCreateDirectory`
 - **Windows: slow script start and console popups** — Python detection now uses `reaper.ExecProcess` (no console window, ~50 ms instead of ~6 s), tries `python` / `py` before the Microsoft Store `python3` stub, and no longer probes Unix paths
 - **Daemon restarts while typing** — editing an IP, port, address, Stream ID or interface restarts the daemon once, 0.75 s after the last change, instead of on every keystroke
-- **Art-Net / OSC skipped every other frame** — packets were sent from the ~30 Hz script loop with a one-frame throttle, so at 25 fps they went out every ~60 ms (16–17 per second). The extension now sends from its own thread, one packet per frame on the frame boundary, phase-locked to the JSFX (exact sub-frame phase for the Timeline source)
+- **Art-Net / OSC skipped every other frame** — packets were sent from the ~30 Hz script loop with a one-frame throttle, so at 25 fps they went out every ~60 ms (16–17 per second). The extension now sends from its own thread, one packet per frame on the frame boundary, phase-locked to the JSFX (exact sub-frame phase for the Timeline source). While paused nothing is sent (a locate while stopped sends the new frame once)
 - **macOS: deployment target ignored** — `CMAKE_OSX_DEPLOYMENT_TARGET` was set after `project()`, so the extension required the build machine's macOS version instead of 10.15 (Intel) / 11.0 (Apple Silicon)
 
 ## [1.3.0-beta-2] - 2026-11-12

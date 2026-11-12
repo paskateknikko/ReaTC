@@ -174,6 +174,9 @@ M.state = {
   jsfx_detected     = false,
   last_write_counter = -1,
   jsfx_stale_count   = 0,
+  jsfx_idle          = false,  -- JSFX not processing (transport stopped)
+  jsfx_scan_time     = nil,    -- last jsfx_in_project() scan
+  jsfx_scan_found    = false,
 
   -- TC Offset
   tc_offset_h        = 0,
@@ -242,12 +245,51 @@ function M.update_tc_from_gmem()
     s.last_write_counter = wc
     s.jsfx_stale_count = 0
     s.jsfx_detected = true
+    s.jsfx_idle = false
   else
     s.jsfx_stale_count = s.jsfx_stale_count + 1
+    -- REAPER stops running FX on tracks that are not record-armed while the
+    -- transport is stopped/paused, so @block (and every gmem write) freezes
+    -- with the last values from playback. A few silent defer cycles = idle.
+    s.jsfx_idle = s.jsfx_stale_count > 3
     if s.jsfx_stale_count > 30 then  -- ~1 second at 30 fps defer
-      s.jsfx_detected = false
+      -- Idle is fine as long as the JSFX is still in the project.
+      s.jsfx_detected = M.jsfx_in_project()
     end
   end
+  -- Frozen gmem still says "running": TC is not advancing while idle.
+  if s.jsfx_idle then s.tc_running = false end
+end
+
+--- Is an enabled ReaTC Timecode Converter JSFX on any track (incl. master)?
+-- Scans at most once per second; used only while the JSFX is idle.
+-- @return boolean
+function M.jsfx_in_project()
+  local s = M.state
+  local now = reaper.time_precise()
+  if s.jsfx_scan_time and now - s.jsfx_scan_time < 1.0 then
+    return s.jsfx_scan_found
+  end
+  s.jsfx_scan_time = now
+
+  local function is_reatc(track, fx)
+    if not reaper.TrackFX_GetEnabled(track, fx) then return false end
+    local ok, ident = reaper.TrackFX_GetNamedConfigParm(track, fx, "fx_ident")
+    if ok and ident:lower():find("reatc_tc%.jsfx") then return true end
+    local _, name = reaper.TrackFX_GetFXName(track, fx, "")
+    return name:find("ReaTC Timecode Converter", 1, true) ~= nil
+  end
+
+  local found = false
+  for i = -1, reaper.CountTracks(0) - 1 do
+    local tr = (i < 0) and reaper.GetMasterTrack(0) or reaper.GetTrack(0, i)
+    for j = 0, reaper.TrackFX_GetCount(tr) - 1 do
+      if is_reatc(tr, j) then found = true; break end
+    end
+    if found then break end
+  end
+  s.jsfx_scan_found = found
+  return found
 end
 
 --- Get the current active timecode values.

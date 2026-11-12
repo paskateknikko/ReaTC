@@ -22,8 +22,8 @@
 namespace reatc {
 
 /// How far past its anchor the clock may run without a fresh anchor before
-/// it stops extrapolating and holds the anchor frame (Lua stalled or the
-/// JSFX stopped processing while TC was running).
+/// it stops extrapolating and goes silent (Lua stalled or the JSFX stopped
+/// processing while TC was running).
 constexpr double MAX_EXTRAPOLATION = 0.5;
 
 /// Latest TC reported by the script.
@@ -56,8 +56,10 @@ struct ClockDecision {
  *   (anchor.start + k * period). A frame at or up to two frames behind the
  *   last one sent is not re-sent, so a new anchor that lands slightly late
  *   never steps TC backwards.
- * - Held (paused, or anchor stale): repeat the anchor frame once per frame
- *   period, like the script-driven output did.
+ * - Paused: no repeats. The anchor frame is sent once if it differs from
+ *   the last frame sent (e.g. a locate while stopped), then output goes
+ *   quiet until TC moves again.
+ * - Stale (running, but no fresh anchor for MAX_EXTRAPOLATION): silent.
  * - Invalid: send nothing.
  */
 inline ClockDecision clock_step(const TcAnchor& a, ClockState& st, double now)
@@ -81,12 +83,11 @@ inline ClockDecision clock_step(const TcAnchor& a, ClockState& st, double now)
     if (st.have_last && behind >= 0 && behind <= 2) return d;  // already sent
   } else {
     d.frame = a.frame;
-    if (st.have_last && st.last_frame == a.frame &&
-        now - st.last_send < period * (1.0 - 1e-3)) {
-      d.next = st.last_send + period;
-      return d;
-    }
     d.next = now + period;
+    // Stale running anchor (script stalled): the anchor frame is older than
+    // what was already extrapolated, so sending it would step back. Drop.
+    if (a.running && st.have_last) return d;
+    if (st.have_last && st.last_frame == a.frame) return d;  // held: drop
   }
 
   d.send = true;
