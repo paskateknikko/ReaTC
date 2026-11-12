@@ -168,7 +168,9 @@ return function(core, outputs)
       sl       = "MTC Locked   " .. core.FR_NAMES[s.framerate_type + 1]
       sl_color = C.blue
     elseif source == "Timeline" then
-      sl       = "Timeline   " .. core.FR_NAMES[s.framerate_type + 1]
+      local label = s.region_mode
+        and string.format("Region %d", s.region_current) or "Timeline"
+      sl       = label .. "   " .. core.FR_NAMES[s.framerate_type + 1]
       sl_color = (s.artnet_enabled or s.osc_enabled) and C.green or C.dim
     else
       sl       = "No active source   " .. core.FR_NAMES[s.framerate_type + 1]
@@ -399,6 +401,55 @@ return function(core, outputs)
       s.tc_offset_negative = false
       core.save_settings()
     end
+
+    -- ── Region Timeline ────────────────────────────────────────────────────
+    ImGui.SeparatorText(ctx, 'Region Timeline')
+
+    local rm_changed, rm = ImGui.Checkbox(ctx, 'TC relative to region start##rgnmode',
+      s.region_mode)
+    if rm_changed then
+      s.region_mode = rm
+      core.save_settings()
+    end
+    ImGui.PushStyleColor(ctx, ImGui.Col_Text, C.dim)
+    ImGui.TextWrapped(ctx,
+      "Timeline source outputs Start TC + time since the current region's start. " ..
+      "No TC is output outside regions.")
+    ImGui.PopStyleColor(ctx)
+
+    if not s.region_mode then ImGui.BeginDisabled(ctx) end
+
+    local hn_changed, hn = ImGui.Checkbox(ctx, 'Hours = region number##rgnhrs',
+      s.region_hours_from_num)
+    if hn_changed then
+      s.region_hours_from_num = hn
+      core.save_settings()
+    end
+
+    local start_str = string.format("%02d:%02d:%02d:%02d",
+      s.region_start_h, s.region_start_m, s.region_start_s, s.region_start_f)
+    ImGui.SetNextItemWidth(ctx, 160)
+    local st_changed, new_st = ImGui.InputText(ctx, 'Start TC##rgnstart', start_str)
+    if st_changed then
+      local rh, rmn, rs, rf = new_st:match("^(%d%d):(%d%d):(%d%d):(%d%d)$")
+      if rh then
+        rh, rmn, rs, rf = tonumber(rh), tonumber(rmn), tonumber(rs), tonumber(rf)
+        if rh <= 39 and rmn <= 59 and rs <= 59 and rf < fps_max then
+          s.region_start_h, s.region_start_m = rh, rmn
+          s.region_start_s, s.region_start_f = rs, rf
+          core.save_settings()
+        end
+      end
+    end
+    if s.region_hours_from_num then
+      ImGui.SameLine(ctx, 0, 8)
+      ImGui.TextColored(ctx, C.dim, "(HH ignored)")
+    end
+    ImGui.TextColored(ctx, C.dim,
+      string.format("%d region%s in project", s.region_count,
+        s.region_count == 1 and "" or "s"))
+
+    if not s.region_mode then ImGui.EndDisabled(ctx) end
 
     -- ── Tools ────────────────────────────────────────────────────────────────
     ImGui.SeparatorText(ctx, 'Tools')

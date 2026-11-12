@@ -74,6 +74,16 @@ M.GMEM_TC_OFFSET_M     = 21
 M.GMEM_TC_OFFSET_S     = 22
 M.GMEM_TC_OFFSET_F     = 23
 M.GMEM_TC_OFFSET_SIGN  = 24
+M.GMEM_RGN_MODE        = 30
+M.GMEM_RGN_HRS_NUM     = 31
+M.GMEM_RGN_START_H     = 32
+M.GMEM_RGN_START_M     = 33
+M.GMEM_RGN_START_S     = 34
+M.GMEM_RGN_START_F     = 35
+M.GMEM_RGN_COUNT       = 36
+M.GMEM_RGN_CURRENT     = 37
+M.GMEM_RGN_LIST        = 100  -- 3 cells per region: start, end, number
+M.RGN_MAX              = 1000 -- must match RGN_MAX in reatc_tc.jsfx
 
 -- State
 M.state = {
@@ -123,6 +133,18 @@ M.state = {
   tc_offset_s        = 0,
   tc_offset_f        = 0,
   tc_offset_negative = false,
+
+  -- Region timeline mode (Timeline source TC relative to region start)
+  region_mode           = false,
+  region_hours_from_num = true,   -- hours = region number
+  region_start_h        = 0,      -- TC at region start (hours ignored if hours_from_num)
+  region_start_m        = 0,
+  region_start_s        = 0,
+  region_start_f        = 0,
+  region_count          = 0,      -- regions currently published to gmem
+  region_current        = 0,      -- region number at play position (from JSFX)
+  region_sync_state     = nil,    -- last project state change count synced
+  region_sync_proj      = nil,    -- last project synced
 
   -- UI state
   show_settings  = false,
@@ -321,6 +343,56 @@ function M.resolve_bind_ip(preferred_ip, preferred_iface)
   return nil, nil
 end
 
+--- Publish the region timeline settings to gmem for the JSFX.
+-- Called every defer cycle (cheap: a handful of gmem writes).
+function M.write_region_settings_to_gmem()
+  local s = M.state
+  reaper.gmem_write(M.GMEM_RGN_MODE,    s.region_mode and 1 or 0)
+  reaper.gmem_write(M.GMEM_RGN_HRS_NUM, s.region_hours_from_num and 1 or 0)
+  reaper.gmem_write(M.GMEM_RGN_START_H, s.region_start_h)
+  reaper.gmem_write(M.GMEM_RGN_START_M, s.region_start_m)
+  reaper.gmem_write(M.GMEM_RGN_START_S, s.region_start_s)
+  reaper.gmem_write(M.GMEM_RGN_START_F, s.region_start_f)
+  s.region_current = math.floor(reaper.gmem_read(M.GMEM_RGN_CURRENT))
+end
+
+--- Publish the current project's region list to gmem for the JSFX.
+-- Only rewrites the list when the project or its state change count differs
+-- from the last sync. Regions are sorted by start time so the JSFX can pick
+-- the region with the latest start when regions overlap.
+-- @param force boolean rewrite even if the project has not changed
+function M.sync_regions_to_gmem(force)
+  local s = M.state
+  local proj = reaper.EnumProjects(-1)
+  local change = reaper.GetProjectStateChangeCount(proj)
+  if not force and proj == s.region_sync_proj and change == s.region_sync_state then
+    return
+  end
+  s.region_sync_proj, s.region_sync_state = proj, change
+
+  local regions = {}
+  local i = 0
+  while true do
+    local ret, isrgn, pos, rgnend, _, num = reaper.EnumProjectMarkers3(proj, i)
+    if ret == 0 then break end
+    if isrgn then regions[#regions + 1] = { pos, rgnend, num } end
+    i = i + 1
+  end
+  table.sort(regions, function(a, b) return a[1] < b[1] end)
+
+  local n = math.min(#regions, M.RGN_MAX)
+  -- Zero the count first so the JSFX never reads a half-written list
+  reaper.gmem_write(M.GMEM_RGN_COUNT, 0)
+  for k = 1, n do
+    local base = M.GMEM_RGN_LIST + (k - 1) * 3
+    reaper.gmem_write(base,     regions[k][1])
+    reaper.gmem_write(base + 1, regions[k][2])
+    reaper.gmem_write(base + 2, regions[k][3])
+  end
+  reaper.gmem_write(M.GMEM_RGN_COUNT, n)
+  s.region_count = n
+end
+
 --- Convert a time position in seconds to HH:MM:SS:FF timecode.
 -- Uses integer math for drop-frame (29.97fps) to avoid float drift.
 -- @param pos number time position in seconds (clamped to >= 0)
@@ -367,6 +439,12 @@ local SK = {
   TC_OFFSET_S            = "tc_offset_s",
   TC_OFFSET_F            = "tc_offset_f",
   TC_OFFSET_NEGATIVE     = "tc_offset_negative",
+  REGION_MODE            = "region_mode",
+  REGION_HOURS_FROM_NUM  = "region_hours_from_num",
+  REGION_START_H         = "region_start_h",
+  REGION_START_M         = "region_start_m",
+  REGION_START_S         = "region_start_s",
+  REGION_START_F         = "region_start_f",
 }
 
 --- Load all settings from REAPER ExtState and apply to `state`.
@@ -398,6 +476,12 @@ function M.load_settings()
   s.tc_offset_s        = tonumber(gets(SK.TC_OFFSET_S)) or 0
   s.tc_offset_f        = tonumber(gets(SK.TC_OFFSET_F)) or 0
   s.tc_offset_negative = gets(SK.TC_OFFSET_NEGATIVE) == "true"
+  s.region_mode           = gets(SK.REGION_MODE) == "true"
+  s.region_hours_from_num = gets(SK.REGION_HOURS_FROM_NUM) ~= "false"  -- default on
+  s.region_start_h        = tonumber(gets(SK.REGION_START_H)) or 0
+  s.region_start_m        = tonumber(gets(SK.REGION_START_M)) or 0
+  s.region_start_s        = tonumber(gets(SK.REGION_START_S)) or 0
+  s.region_start_f        = tonumber(gets(SK.REGION_START_F)) or 0
 
   -- Clean up legacy settings (framerate now owned by JSFX, old track-management keys)
   reaper.DeleteExtState(M.EXT_SECTION, "framerate_type", true)
@@ -428,6 +512,12 @@ function M.save_settings()
   sets(SK.TC_OFFSET_S,       s.tc_offset_s)
   sets(SK.TC_OFFSET_F,       s.tc_offset_f)
   sets(SK.TC_OFFSET_NEGATIVE, s.tc_offset_negative)
+  sets(SK.REGION_MODE,           s.region_mode)
+  sets(SK.REGION_HOURS_FROM_NUM, s.region_hours_from_num)
+  sets(SK.REGION_START_H,        s.region_start_h)
+  sets(SK.REGION_START_M,        s.region_start_m)
+  sets(SK.REGION_START_S,        s.region_start_s)
+  sets(SK.REGION_START_F,        s.region_start_f)
 end
 
 return M

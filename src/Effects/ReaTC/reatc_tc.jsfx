@@ -46,6 +46,16 @@ version:{{VERSION}}
 //   [22] TC_OFFSET_S     Script -> JSFX   offset seconds (0-59)
 //   [23] TC_OFFSET_F     Script -> JSFX   offset frames (0-fps)
 //   [24] TC_OFFSET_SIGN  Script -> JSFX   0=add 1=subtract
+//   [30] RGN_MODE        Script -> JSFX   Timeline mode: 0=absolute 1=region-relative
+//   [31] RGN_HRS_NUM     Script -> JSFX   1=hours taken from region number
+//   [32] RGN_START_H     Script -> JSFX   TC at region start: hours (0-39)
+//   [33] RGN_START_M     Script -> JSFX   TC at region start: minutes
+//   [34] RGN_START_S     Script -> JSFX   TC at region start: seconds
+//   [35] RGN_START_F     Script -> JSFX   TC at region start: frames
+//   [36] RGN_COUNT       Script -> JSFX   number of regions in list (0-1000)
+//   [37] RGN_CURRENT     JSFX -> Script   region number at play position (0=none)
+//   [100+i*3 ...]        Script -> JSFX   region list sorted by start:
+//                                         +0 start (s), +1 end (s), +2 region number
 
 // Source toggles
 slider1:1<0,1,1{Off,On}>-LTC Input
@@ -100,6 +110,9 @@ TC_WRITE_COUNTER=7; SCRIPT_ALIVE=8;
 // gmem[17]=ACTIVE_SOURCE, gmem[18]=LTC_LOCK, gmem[19]=MTC_LOCK
 // (hardcoded in gmem writes to avoid EEL2 local variable pool overflow)
 TC_OFFSET_H=20; TC_OFFSET_M=21; TC_OFFSET_S=22; TC_OFFSET_F=23; TC_OFFSET_SIGN=24;
+RGN_MODE=30; RGN_HRS_NUM=31;
+RGN_START_H=32; RGN_START_M=33; RGN_START_S=34; RGN_START_F=35;
+RGN_COUNT=36; RGN_CURRENT=37; RGN_LIST=100; RGN_MAX=1000;
 
 // Source IDs
 SRC_NONE=0; SRC_LTC=1; SRC_MTC=2; SRC_TIMELINE=3;
@@ -168,6 +181,8 @@ src_holdoff=0;  // grace period samples before switching to lower-priority sourc
 
 // ── Timeline state ──
 tl_h=0; tl_m=0; tl_s=0; tl_f=0; tl_active=0;
+tl_region_mode=0;  // 0=absolute timeline, 1=region-relative (from gmem[RGN_MODE])
+tl_region=0;       // region number at play position (0 = none / absolute mode)
 
 // ── GFX state ──
 gfx_alive_timeout = 0;
@@ -262,6 +277,74 @@ function tl_tc_from_pos(pos) local(total, ts, d, mm, tf) (
     tl_m = ts % 60;
     tl_h = floor(ts / 60) % 24;
   );
+);
+
+// TC h:m:s:f -> true frame count (DF-aware, excludes dropped frame labels)
+function tc_to_frames(h, m, s, f) local(mt) (
+  fps_type == 2 ? (
+    mt = h * 60 + m;
+    h * 108000 + m * 1800 + s * 30 + f - 2 * (mt - floor(mt / 10));
+  ) : (
+    ((h * 60 + m) * 60 + s) * fps_int + f;
+  );
+);
+
+// True frame count -> tl_h/m/s/f, wrapping at 40h (LTC BCD max)
+function tl_from_frames(total) local(d, mm, tf, ts) (
+  fps_type == 2 ? (
+    total = total % 4315680;
+    d  = floor(total / 17982);
+    mm = total % 17982;
+    tf = total + 18*d + 2*max(0, floor((mm - 2) / 1798));
+    tl_h = floor(tf / 108000) % 40;
+    tl_m = floor(tf / 1800)   % 60;
+    tl_s = floor(tf / 30)     % 60;
+    tl_f = tf % 30;
+  ) : (
+    total = total % (40 * 3600 * fps_int);
+    tl_f = total % fps_int;
+    ts   = floor(total / fps_int);
+    tl_s = ts % 60;
+    ts   = floor(ts / 60);
+    tl_m = ts % 60;
+    tl_h = floor(ts / 60) % 40;
+  );
+);
+
+// Region-relative timeline TC (into tl_h/m/s/f, tl_region).
+// Finds the region containing pos (list is sorted by start, so the region
+// with the latest start wins when regions overlap), then outputs the
+// configured start TC plus time elapsed since the region start. When
+// RGN_HRS_NUM is set, the start hours are replaced by the region number.
+// Returns 1 if pos is inside a region, 0 otherwise.
+function tl_tc_region(pos) local(i, n, base, idx, sh) (
+  n = min(floor(gmem[RGN_COUNT]), RGN_MAX);
+  idx = -1;
+  i = 0;
+  loop(n,
+    base = RGN_LIST + i * 3;
+    gmem[base] <= pos && pos < gmem[base + 1] ? idx = i;
+    i += 1;
+  );
+  idx >= 0 ? (
+    base = RGN_LIST + idx * 3;
+    tl_region = floor(gmem[base + 2]);
+    sh = gmem[RGN_HRS_NUM] > 0.5 ? tl_region % 40 : floor(gmem[RGN_START_H]);
+    // Small epsilon guards against float error landing just below a frame edge
+    tl_from_frames(
+      tc_to_frames(sh, floor(gmem[RGN_START_M]), floor(gmem[RGN_START_S]), floor(gmem[RGN_START_F]))
+      + floor((pos - gmem[base]) * (fps_type == 2 ? 30 : fps_int) + 0.000001));
+    1;
+  ) : (
+    tl_region = 0;
+    0;
+  );
+);
+
+// Active output TC -> seconds (same time base as tc_to_seconds_qf).
+// Hours wrap at 24 to match the MTC hours range (see qf_tc_h assignments).
+function out_to_seconds() (
+  tc_to_frames(out_h % 24, out_m, out_s, out_f) / fps_real;
 );
 
 // ── LTC Encoder frame builder ──
@@ -449,16 +532,6 @@ function advance_tc_frame() local(fps_i) (
   );
 );
 
-// Active output TC (after offset) -> seconds, same time base as tc_to_seconds_qf
-function out_to_seconds() local(mt) (
-  fps_type == 2 ? (
-    mt = out_h * 60 + out_m;
-    (out_h * 108000 + out_m * 1800 + out_s * 30 + out_f - 2 * (mt - floor(mt / 10))) / 29.97;
-  ) : (
-    (((out_h * 60 + out_m) * 60 + out_s) * fps_int + out_f) / fps_real;
-  );
-);
-
 function tc_to_seconds_qf() local(fr, fps_i, total, mins_total) (
   fr    = (qf_fps_t == 0) ? 24 : (qf_fps_t == 1) ? 25 : (qf_fps_t == 2) ? 29.97 : 30;
   fps_i = (qf_fps_t == 0) ? 24 : (qf_fps_t == 1) ? 25 : 30;
@@ -475,7 +548,7 @@ function tc_to_seconds_qf() local(fr, fps_i, total, mins_total) (
 
 function build_ff_sysex() local(type_bits, hours_byte) (
   type_bits  = fps_type & 0x03;
-  hours_byte = (type_bits << 5) | (out_h & 0x1F);
+  hours_byte = (type_bits << 5) | ((out_h % 24) & 0x1F);
   mem[FF_BUF+0] = 0xF0;
   mem[FF_BUF+1] = 0x7F;
   mem[FF_BUF+2] = 0x7F;
@@ -784,10 +857,16 @@ is_playing = (play_state & 1) ? 1 : 0;
 // ═══════════════════════════════════════════════════════════════════════
 
 // ── 1. Timeline source ──
+tl_region_mode = gmem[RGN_MODE] > 0.5;
 tl_active = is_playing;
-tl_active ? (
-  tl_tc_from_pos(play_position);
+tl_region_mode ? (
+  // Region mode: only active while the play cursor is inside a region
+  tl_active ? (tl_active = tl_tc_region(play_position);) : (tl_region = 0;);
+) : (
+  tl_region = 0;
+  tl_active ? (tl_tc_from_pos(play_position););
 );
+gmem[RGN_CURRENT] = tl_region;
 
 // ── 2. LTC lock expiry ──
 ltc_valid_samples > 0 ? (
@@ -900,7 +979,7 @@ slider8 > 0.5 && out_valid ? (
 
   // Inactive → active transition: resync
   out_valid && !qf_active ? (
-    qf_tc_h = out_h; qf_tc_m = out_m; qf_tc_s = out_s; qf_tc_f = out_f;
+    qf_tc_h = out_h % 24; qf_tc_m = out_m; qf_tc_s = out_s; qf_tc_f = out_f;
     qf_piece = 0;
     qf_samples_to_next = 0;
     // Send full-frame SysEx for instant locate
@@ -932,10 +1011,10 @@ slider8 > 0.5 && out_valid ? (
     // ERR frames in MTC receivers).
     qf_piece == 0 ? (
       mtc_expected = tc_to_seconds_qf();
-      // Use active output TC (after offset) as drift reference
+      // Use active output TC (after region mapping + offset) as drift reference
       active_source == SRC_TIMELINE ? (
         abs(out_to_seconds() - mtc_expected) > (2.0 / fps_real) ? (
-          qf_tc_h = out_h; qf_tc_m = out_m; qf_tc_s = out_s; qf_tc_f = out_f;
+          qf_tc_h = out_h % 24; qf_tc_m = out_m; qf_tc_s = out_s; qf_tc_f = out_f;
           qf_samples_to_next = 0;
         );
       );
@@ -1274,7 +1353,8 @@ gfx_drawstr(#tc_str);
     );
   ) : active_source == SRC_TIMELINE ? (
     strcpy(#src_prefix, "ACTIVE SOURCE: ");
-    strcpy(#src_name, "REAPER Timeline");
+    tl_region_mode ? sprintf(#src_name, "Region %d", tl_region)
+                   : strcpy(#src_name, "REAPER Timeline");
     src_cr=0.75; src_cg=0.78; src_cb=0.85;
   ) : (
     strcpy(#src_prefix, "");
@@ -1627,7 +1707,7 @@ tl_en ? (
 gfx_setfont(1, "Arial", 11, 0);
 tl_is_active ? (gfx_r=0.20; gfx_g=0.88; gfx_b=0.38;) : tl_en ? (gfx_r=0.55; gfx_g=0.58; gfx_b=0.65;) : (gfx_r=0.42; gfx_g=0.44; gfx_b=0.42;);
 gfx_x = src_col_x + 24; gfx_y = row_y + 3;
-gfx_drawstr("Timeline");
+gfx_drawstr(tl_region_mode ? "Regions" : "Timeline");
 
 // Mini TC box
 gfx_r=0.06; gfx_g=0.07; gfx_b=0.06;
@@ -1657,9 +1737,13 @@ gfx_drawstr(#tl_mini);
 // Status text
 gfx_setfont(1, "Arial", 9, 0);
 tl_en ? (
-  is_playing ? (
+  is_playing && tl_region_mode && !tl_active ? (
+    gfx_r=0.95; gfx_g=0.65; gfx_b=0.15;
+    strcpy(#tl_stat, "no region");
+  ) : is_playing ? (
     gfx_r=0.20; gfx_g=0.80; gfx_b=0.35;
-    strcpy(#tl_stat, "playing");
+    tl_region_mode ? sprintf(#tl_stat, "region %d", tl_region)
+                   : strcpy(#tl_stat, "playing");
   ) : (
     gfx_r=0.88; gfx_g=0.20; gfx_b=0.20;
     strcpy(#tl_stat, "stopped");

@@ -18,6 +18,7 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 
 - **Preferred IP + Interface override for network outputs** — Art-Net and OSC settings gained a gma3-style "Preferred IP" CIDR field (e.g. `10.0.0.0/8`) and an Interface combo; the daemon's sending socket binds to the local NIC whose IP falls inside the Preferred IP range, or to an explicitly chosen interface when subnets overlap
 - **Art-Net multi-unicast** — Art-Net "Destination IP" now accepts a comma-separated list (e.g. `192.168.0.50, 192.168.0.51`) and sends the same TimeCode packet to each target
+- **Region Timeline mode** — Timeline source can output TC relative to the current region's start (Settings → Region Timeline): configurable start TC, optional hours = region number; region list is synced from the Lua script to the JSFX via gmem
 - **`reatc_netdiscover.py`** — locale-independent IPv4 interface enumeration daemon; on Windows uses `iphlpapi.GetAdaptersAddresses` via ctypes (works regardless of system language), parses `ifconfig` on macOS
 
 ### Fixed

@@ -48,6 +48,7 @@ https://github.com/paskateknikko/ReaTC/raw/reapack/index.xml
 - **LTC audio decoder** — real-time biphase-mark decoding with adaptive clock recovery; auto-detects frame rate (24/25/29.97DF/30); configurable threshold; varispeed support
 - **MTC input** — receives and decodes MIDI Timecode quarter-frame and full-frame SysEx messages; instant locate; 2-frame lag compensation
 - **REAPER Timeline** — reads timecode directly from transport position
+- **Region Timeline mode** — Timeline source can output TC relative to the current region's start, with a configurable start TC and optional hours = region number
 - **Source priority system** — each source configurable as High/Normal/Low priority with automatic failover
 
 ### Timecode Outputs
@@ -145,6 +146,17 @@ In the JSFX plugin UI, enable the outputs you need:
 1. Run the ReaTC script and open **Settings**
 2. Set **destination IP**, **port** (default 9000), and **OSC address** (default `/tc`)
 3. Enable **OSC Output** — broadcasts `/tc ,iiiii H M S F type` at ~30 fps
+
+### Region Timeline Mode
+
+Makes the Timeline source restart timecode at every region — handy when each song or cue is a region.
+
+1. Run the ReaTC script, open **Settings** → **Region Timeline**
+2. Enable **TC relative to region start**
+3. Set **Start TC** (the timecode output at each region's start, e.g. `00:00:00:00`)
+4. Optionally enable **Hours = region number** — region 3 then starts at `03:MM:SS:FF` (wraps at 40 for LTC/Art-Net/OSC; MTC only supports hours 0-23, so MTC output wraps at 24)
+
+Output TC = Start TC + time since region start. Outside regions no Timeline TC is output. When regions overlap, the one that started last wins. The ReaTC script must be running, since it sends the region list to the JSFX. The global TC Offset is still applied on top.
 
 ### Bake LTC from Regions
 

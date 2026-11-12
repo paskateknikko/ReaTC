@@ -112,6 +112,10 @@ local function loop()
   reaper.gmem_write(core.GMEM_TC_OFFSET_F, core.state.tc_offset_f)
   reaper.gmem_write(core.GMEM_TC_OFFSET_SIGN, core.state.tc_offset_negative and 1 or 0)
 
+  -- Publish region timeline settings + region list for JSFX region mode
+  core.write_region_settings_to_gmem()
+  core.sync_regions_to_gmem()
+
   -- Read active TC from JSFX via gmem
   core.update_tc_from_gmem()
 
