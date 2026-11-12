@@ -9,7 +9,7 @@
 --   **Sources**: LTC audio, MIDI Timecode, REAPER Timeline (priority-based failover)
 --   **Outputs**: Art-Net, MTC, OSC, LTC audio, Region-based LTC bake
 --
---   Requires REAPER 6.32+, ReaImGui, Python 3. Cross-platform (macOS 10.15+, Windows 10+).
+--   Requires REAPER 6.32+, ReaImGui. Python 3 only for Bake LTC. Cross-platform (macOS 10.15+, Windows 10+).
 --
 --   [GitHub](https://github.com/paskateknikko/ReaTC)
 -- @provides
@@ -18,7 +18,7 @@
 --   reatc_core.lua
 --   reatc_ui.lua
 --   reatc_outputs.lua
---   reatc_*.py
+--   reatc_ltcgen.py
 --   [extension darwin-arm64] reaper_reatc-arm64.dylib
 --   [extension darwin64] reaper_reatc-x86_64.dylib
 --   [extension win64] reaper_reatc64.dll
@@ -76,27 +76,12 @@ local function init()
   -- Attach to JSFX shared memory
   reaper.gmem_attach("ReaTC_LTC")
 
-  core.state.python_bin = core.find_python()
-  if not core.state.python_bin then
-    core.state.python_error = "Python 3 not found"
-    reaper.MB(
-      "Python 3 not found.\n\n" ..
-      "macOS: Python 3 is pre-installed.\n" ..
-      "Windows: Install from Microsoft Store or https://python.org",
-      "ReaTC — Python Required", 0)
-  end
-
   ui.init()
-
-  -- Pre-start daemons if outputs were enabled from saved settings
-  outputs.prestart_daemons()
 end
 
 local function loop()
   if not ui.draw_ui() then
     -- Window closed — clean up
-    outputs.stop_artnet_daemon()
-    outputs.stop_osc_daemon()
     core.save_settings()
     return  -- do NOT defer again
   end
@@ -125,13 +110,13 @@ local function loop()
   if reaper.GetExtState("ReaTC_CMD", "toggle_artnet") == "1" then
     reaper.DeleteExtState("ReaTC_CMD", "toggle_artnet", false)
     s.artnet_enabled = not s.artnet_enabled
-    if s.artnet_enabled then s.packets_sent = 0 else outputs.stop_artnet_daemon() end
+    outputs.reset_artnet()
     core.save_settings()
   end
   if reaper.GetExtState("ReaTC_CMD", "toggle_osc") == "1" then
     reaper.DeleteExtState("ReaTC_CMD", "toggle_osc", false)
     s.osc_enabled = not s.osc_enabled
-    if s.osc_enabled then s.osc_packets_sent = 0 else outputs.stop_osc_daemon() end
+    outputs.reset_osc()
     core.save_settings()
   end
   -- Publish state for C++ toggleaction callback

@@ -14,8 +14,6 @@ REPO_ROOT = Path(__file__).parent
 BUILD_SCRIPTS = [
     REPO_ROOT / "build" / "build.py",
     REPO_ROOT / "build" / "verify.py",
-    REPO_ROOT / "src" / "Scripts" / "ReaTC" / "reatc_artnet.py",
-    REPO_ROOT / "src" / "Scripts" / "ReaTC" / "reatc_osc.py",
     REPO_ROOT / "src" / "Scripts" / "ReaTC" / "reatc_ltcgen.py",
 ]
 

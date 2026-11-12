@@ -67,8 +67,11 @@ jobs:
           pip install pytest
           python3 -m pytest tests/ -v
 
-      - name: Build C++ extension
+      - name: Build C++ extension + unit tests
         run: |
-          cmake -S src/extension -B src/extension/build -DCMAKE_BUILD_TYPE=Release
+          cmake -S src/extension -B src/extension/build -DCMAKE_BUILD_TYPE=Release -DREATC_BUILD_TESTS=ON
           cmake --build src/extension/build --config Release
           echo "✓ C++ extension compiled successfully"
+
+      - name: Run C++ unit tests
+        run: ctest --test-dir src/extension/build -C Release --output-on-failure

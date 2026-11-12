@@ -125,17 +125,31 @@ Requires CMake 3.15+ and a C++17 compiler. On macOS, Xcode Command Line Tools ar
 | Lua ↔ JSFX | `gmem` shared memory (`ReaTC_LTC` namespace) | TC values, lock status, TC offset |
 | C++ → Lua | `ExtState` (`ReaTC_CMD` section, consumed once) | Toggle Art-Net/OSC from action triggers |
 | Lua → C++ | `ExtState` (`ReaTC_STATE` section, read-only by C++) | Current toggle state for Actions list indicators |
-| Lua → Art-Net | Persistent subprocess (`reatc_artnet.py`) via `io.popen()` | UDP Art-Net TimeCode broadcast |
-| Lua → OSC | Persistent subprocess (`reatc_osc.py`) via `io.popen()` | UDP OSC timecode broadcast |
+| Lua → C++ (API) | `reaper.ReaTC_SendArtNetTC` / `ReaTC_SendOSCTC` | Art-Net TimeCode / OSC UDP packets |
+| Lua → C++ (API) | `reaper.ReaTC_ListInterfaces` | Local IPv4 interfaces for Preferred IP / Interface |
 
 #### Lua ↔ JSFX (`gmem`)
 
 `gmem_attach("ReaTC_LTC")` creates a shared namespace between Lua and the JSFX. The JSFX writes TC values (H/M/S/F at `gmem[0–3]`), framerate (`gmem[4]`), play state (`gmem[5]`), validity flag (`gmem[6]`), write counter (`gmem[7]`), active source (`gmem[17]`), and lock status (`gmem[18–19]` for LTC/MTC). Lua writes a heartbeat (`gmem[8]`) and TC offset (H/M/S/F/sign at `gmem[20–24]`) which the JSFX applies before all outputs. Peak level is a local variable exposed via slider, not gmem.
 
-#### Lua → Art-Net Python (persistent subprocess)
+#### Lua → C++ network API
 
-`reatc_artnet.py` is launched once via `io.popen()` with its stdin kept open for the lifetime of the session. Lua writes `H:M:S:F fps\n` lines at ~25 Hz; the daemon parses each line and sends an Art-Net TimeCode UDP packet (port 6454) to the configured IP. The subprocess is restarted when the target IP changes.
+The extension registers ReaScript functions (`src/extension/reaper_reatc.cpp`):
 
-#### Lua → OSC Python (persistent subprocess)
+| Function | Returns |
+|---|---|
+| `ReaTC_GetVersion()` | extension version (CMake `REATC_VERSION`, set from the release tag) |
+| `ReaTC_ListInterfaces()` | tab-separated `ip  name  broadcast-or-dash  netmask` rows for up, non-loopback IPv4 interfaces |
+| `ReaTC_SendArtNetTC(dests, srcIP, streamID, h, m, s, f, type)` | packets sent, or -1 |
+| `ReaTC_SendOSCTC(destIP, port, address, srcIP, h, m, s, f, type)` | 1, or -1 |
+| `ReaTC_GetLastError(kind)` | `"artnet"` / `"osc"`: last error, or a bind warning after a successful send |
 
-Same pattern as Art-Net. `reatc_osc.py` reads TC lines from stdin and sends `/tc ,iiiii H M S F type` OSC UDP messages to the configured IP and port.
+The Lua defer loop calls the send functions once per frame (throttled to the active framerate). Each output keeps one UDP socket (`SO_BROADCAST`, optionally bound to the Preferred IP / Interface address) that is rebuilt when the source IP changes; destinations are re-parsed when the string changes, so settings edits apply on the next packet. Packet builders live in the header-only `reatc_packets.h`, covered by `src/extension/tests/test_packets.cpp`:
+
+```bash
+cmake -S src/extension -B src/extension/build -DREATC_BUILD_TESTS=ON
+cmake --build src/extension/build --config Release
+ctest --test-dir src/extension/build -C Release
+```
+
+Without the extension, Art-Net and OSC output are unavailable and the UI says so. Python is only used by *Bake LTC from regions* (`reatc_ltcgen.py`).

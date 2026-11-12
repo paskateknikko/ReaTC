@@ -24,8 +24,9 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Build extension
+        shell: bash
         run: |
-          cmake -S src/extension -B src/extension/build -DCMAKE_BUILD_TYPE=Release
+          cmake -S src/extension -B src/extension/build -DCMAKE_BUILD_TYPE=Release -DREATC_VERSION="${GITHUB_REF_NAME#v}"
           cmake --build src/extension/build --config Release
 
       - name: Rename artifact

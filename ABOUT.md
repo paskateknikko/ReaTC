@@ -23,14 +23,15 @@ Each source has a configurable priority (High / Normal / Low) with automatic fai
 - All standard frame rates (24, 25, 29.97DF, 30)
 - TC Offset — user-configurable HH:MM:SS:FF offset applied before all outputs
 - Source priority with automatic failover between LTC, MTC, and Timeline
-- Network sync status with packet counts and daemon health indicators
+- Network sync status with packet counts and error indicators
 - Cross-platform (macOS 10.15+, Windows 10+)
 
 ## Requirements
 
 - REAPER 6.32+
 - ReaImGui (auto-installed via ReaPack)
-- Python 3 (standard library only)
+- ReaTC extension (included) for Art-Net / OSC output
+- Python 3 only for Bake LTC (standard library only)
 
 ## Links
 

@@ -9,6 +9,15 @@
  *   _REATC_TOGGLE_ARTNET  Toggle Art-Net output
  *   _REATC_TOGGLE_OSC     Toggle OSC output
  *
+ * and exports a small ReaScript API used by reatc.lua for network output
+ * (no Python, no subprocesses):
+ *
+ *   ReaTC_GetVersion()       extension version string
+ *   ReaTC_ListInterfaces()   local IPv4 interfaces (tab-separated rows)
+ *   ReaTC_SendArtNetTC(...)  send one Art-Net TimeCode packet
+ *   ReaTC_SendOSCTC(...)     send one OSC timecode message
+ *   ReaTC_GetLastError(kind) last error/warning for "artnet" or "osc"
+ *
  * Copyright (c) 2025 Tuukka Aimasmäki. MIT License — see LICENSE.
  */
 
@@ -33,8 +42,16 @@
  */
 
 #include "reaper_plugin.h"
+#include <cstdint>
 #include <cstring>
 #include <string>
+
+#include "reatc_net.h"
+#include "reatc_packets.h"
+
+#ifndef REATC_VERSION
+#define REATC_VERSION "DEV"
+#endif
 
 // ---------------------------------------------------------------------------
 // REAPER API function pointers (resolved at load time via GetFunc)
@@ -256,6 +273,127 @@ static int toggle_action(int command_id)
 }
 
 // ---------------------------------------------------------------------------
+// ReaScript API: network output
+// ---------------------------------------------------------------------------
+// All functions run on REAPER's main thread (called from the Lua defer loop),
+// so no locking is needed. Sockets live for the session and are rebuilt when
+// the source IP changes.
+
+static reatc::UdpSender g_artnet;
+static reatc::UdpSender g_osc;
+static std::string g_ifaces_buf;  // backing store for ReaTC_ListInterfaces
+static std::string g_err_buf;     // backing store for ReaTC_GetLastError
+
+static const char* ReaTC_GetVersion() { return REATC_VERSION; }
+
+static const char* ReaTC_ListInterfaces()
+{
+  g_ifaces_buf = reatc::list_interfaces();
+  return g_ifaces_buf.c_str();
+}
+
+static int ReaTC_SendArtNetTC(const char* dests, const char* srcIP, int streamID,
+                              int h, int m, int s, int f, int type)
+{
+  if (!reatc::tc_in_range(h, m, s, f, type)) return -1;
+  uint8_t pkt[reatc::ARTNET_TC_LEN];
+  reatc::build_artnet_timecode(pkt, h, m, s, f, type, streamID);
+  return g_artnet.send(dests ? dests : "", reatc::ARTNET_PORT,
+                       srcIP ? srcIP : "", pkt, sizeof(pkt));
+}
+
+static int ReaTC_SendOSCTC(const char* destIP, int port, const char* address,
+                           const char* srcIP, int h, int m, int s, int f, int type)
+{
+  if (!reatc::tc_in_range(h, m, s, f, type)) return -1;
+  if (!address || address[0] != '/') return -1;
+  const auto pkt = reatc::build_osc_timecode(address, h, m, s, f, type);
+  return g_osc.send(destIP ? destIP : "", port, srcIP ? srcIP : "",
+                    pkt.data(), pkt.size());
+}
+
+static const char* ReaTC_GetLastError(const char* kind)
+{
+  if (kind && std::strcmp(kind, "osc") == 0) g_err_buf = g_osc.last_error();
+  else g_err_buf = g_artnet.last_error();
+  return g_err_buf.c_str();
+}
+
+// vararg wrappers: ReaScript passes ints as intptr_t-sized values in arglist.
+#define ARG_I(i) static_cast<int>(reinterpret_cast<intptr_t>(arglist[i]))
+#define ARG_S(i) static_cast<const char*>(arglist[i])
+
+static void* va_GetVersion(void**, int)
+{
+  return (void*)ReaTC_GetVersion();
+}
+static void* va_ListInterfaces(void**, int)
+{
+  return (void*)ReaTC_ListInterfaces();
+}
+static void* va_SendArtNetTC(void** arglist, int n)
+{
+  if (n < 8) return (void*)(intptr_t)-1;
+  return (void*)(intptr_t)ReaTC_SendArtNetTC(ARG_S(0), ARG_S(1), ARG_I(2),
+      ARG_I(3), ARG_I(4), ARG_I(5), ARG_I(6), ARG_I(7));
+}
+static void* va_SendOSCTC(void** arglist, int n)
+{
+  if (n < 9) return (void*)(intptr_t)-1;
+  return (void*)(intptr_t)ReaTC_SendOSCTC(ARG_S(0), ARG_I(1), ARG_S(2), ARG_S(3),
+      ARG_I(4), ARG_I(5), ARG_I(6), ARG_I(7), ARG_I(8));
+}
+static void* va_GetLastError(void** arglist, int n)
+{
+  return (void*)ReaTC_GetLastError(n > 0 ? ARG_S(0) : nullptr);
+}
+
+#undef ARG_I
+#undef ARG_S
+
+struct ApiFunc {
+  const char* name;  // without the API_ prefix
+  void* func;
+  void* vararg;
+  const char* def;   // "ret\0argtypes\0argnames\0help"
+};
+
+static const ApiFunc g_api[] = {
+  { "ReaTC_GetVersion", (void*)ReaTC_GetVersion, (void*)va_GetVersion,
+    "const char*\0\0\0ReaTC extension version string." },
+  { "ReaTC_ListInterfaces", (void*)ReaTC_ListInterfaces, (void*)va_ListInterfaces,
+    "const char*\0\0\0Local up, non-loopback IPv4 interfaces, one per line: "
+    "ip<TAB>name<TAB>broadcast-or-dash<TAB>netmask." },
+  { "ReaTC_SendArtNetTC", (void*)ReaTC_SendArtNetTC, (void*)va_SendArtNetTC,
+    "int\0const char*,const char*,int,int,int,int,int,int\0"
+    "dests,srcIP,streamID,hours,minutes,seconds,frames,type\0"
+    "Send one Art-Net TimeCode packet to each comma-separated destination. "
+    "srcIP binds the socket to a local IPv4 (empty = default route). "
+    "type: 0=24, 1=25, 2=29.97DF, 3=30. Returns packets sent, or -1 on error "
+    "(see ReaTC_GetLastError(\"artnet\"))." },
+  { "ReaTC_SendOSCTC", (void*)ReaTC_SendOSCTC, (void*)va_SendOSCTC,
+    "int\0const char*,int,const char*,const char*,int,int,int,int,int\0"
+    "destIP,port,address,srcIP,hours,minutes,seconds,frames,type\0"
+    "Send one OSC message '<address> ,iiiii H M S F type'. Returns 1, or -1 on "
+    "error (see ReaTC_GetLastError(\"osc\"))." },
+  { "ReaTC_GetLastError", (void*)ReaTC_GetLastError, (void*)va_GetLastError,
+    "const char*\0const char*\0kind\0"
+    "Last error (after a failed send) or bind warning (after a successful send) "
+    "for kind \"artnet\" or \"osc\"; empty if none." },
+};
+
+static void register_api(bool add)
+{
+  if (!plugin_register) return;
+  for (const auto& a : g_api) {
+    const std::string pre = add ? "" : "-";
+    plugin_register((pre + "API_" + a.name).c_str(), a.func);
+    plugin_register((pre + "APIdef_" + a.name).c_str(), (void*)a.def);
+    plugin_register((pre + "APIvararg_" + a.name).c_str(), a.vararg);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 /**
@@ -275,6 +413,12 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
     // Unregister timer
     if (plugin_register)
       plugin_register("-timer", (void*)poll_jsfx_open_request);
+
+    // Network output: unregister API, close sockets
+    register_api(false);
+    g_artnet.close();
+    g_osc.close();
+    reatc::net_shutdown();
 
     // Clean up cached script registrations
     if (AddRemoveReaScript && GetResourcePath) {
@@ -346,6 +490,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
     log_msg("ReaTC: failed to register toggleaction\n");
     return 0;
   }
+
+  // ReaScript API for network output (Art-Net / OSC / interface discovery)
+  reatc::net_init();
+  register_api(true);
 
   // Register JSFX slider polling timer (only if TrackFX API is available)
   if (CountTracks && GetTrack && GetMasterTrack &&

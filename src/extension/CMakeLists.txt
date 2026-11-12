@@ -28,7 +28,15 @@ if(APPLE)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "${MACOS_DEPLOYMENT_TARGET}" CACHE STRING "Minimum macOS version")
 endif()
 
-add_library(reaper_reatc SHARED reaper_reatc.cpp)
+add_library(reaper_reatc SHARED reaper_reatc.cpp reatc_net.cpp)
+
+# Version reported by ReaTC_GetVersion() (CI passes the release tag)
+set(REATC_VERSION "DEV" CACHE STRING "ReaTC version string")
+target_compile_definitions(reaper_reatc PRIVATE REATC_VERSION="${REATC_VERSION}")
+
+if(WIN32)
+  target_link_libraries(reaper_reatc PRIVATE ws2_32 iphlpapi)
+endif()
 
 # Windows minimum version → _WIN32_WINNT hex value
 if(WIN32)
@@ -64,4 +72,13 @@ if(NOT WIN32)
     CXX_VISIBILITY_PRESET hidden
     C_VISIBILITY_PRESET hidden
   )
+endif()
+
+# Unit tests for the packet builders (header-only, no REAPER needed)
+option(REATC_BUILD_TESTS "Build ReaTC extension unit tests" OFF)
+if(REATC_BUILD_TESTS)
+  enable_testing()
+  add_executable(reatc_tests tests/test_packets.cpp)
+  target_include_directories(reatc_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME reatc_tests COMMAND reatc_tests)
 endif()

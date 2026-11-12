@@ -33,8 +33,6 @@ dist/
 │       ├── reatc_outputs.lua
 │       ├── reatc_ui.lua
 │       ├── reatc_regions_to_ltc.lua
-│       ├── reatc_artnet.py
-│       ├── reatc_osc.py
 │       └── reatc_ltcgen.py
 └── Effects/
     └── ReaTC/

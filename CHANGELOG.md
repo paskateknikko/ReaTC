@@ -14,6 +14,16 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 
 ## [Unreleased]
 
+### Changed
+
+- **Art-Net and OSC are sent natively by the ReaTC extension** — the C++ extension now exports a ReaScript API (`ReaTC_SendArtNetTC`, `ReaTC_SendOSCTC`, `ReaTC_ListInterfaces`, `ReaTC_GetVersion`, `ReaTC_GetLastError`) and sends UDP directly from REAPER. No Python, no subprocesses, no console windows; settings changes apply on the next packet. The extension is now **required** for network output — the UI shows "ReaTC extension not loaded" without it, and warns when the extension and script versions differ
+- **Python is only needed for Bake LTC** — the main script no longer looks for Python at startup
+- **Interface list** shows only adapters that are up
+
+### Removed
+
+- `reatc_artnet.py`, `reatc_osc.py`, `reatc_netdiscover.py` Python daemons (packet tests ported to C++: `src/extension/tests/test_packets.cpp`, run in CI)
+
 ### Added
 
 - **Fake-broadcast warning** — Art-Net and OSC settings warn when a destination looks like a broadcast (`x.y.z.255`) but is not the broadcast address of the bound / matching interface (e.g. `10.101.6.255` on a `/8` network), since such packets are silently dropped

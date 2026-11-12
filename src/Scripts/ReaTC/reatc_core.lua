@@ -49,10 +49,6 @@ do
   M.script_path = info.source:match("@(.+[\\/])") or ""
 end
 
-M.py_artnet       = M.script_path .. "reatc_artnet.py"
-M.py_osc          = M.script_path .. "reatc_osc.py"
-M.py_netdiscover  = M.script_path .. "reatc_netdiscover.py"
-
 M.is_win = reaper.GetOS():find("Win") ~= nil
 M.dev_null = M.is_win and "2>NUL" or "2>/dev/null"
 M.PYTHON_CANDIDATES = M.is_win and M.PYTHON_CANDIDATES_WIN or M.PYTHON_CANDIDATES_UNIX
@@ -67,15 +63,16 @@ function M.quote_bin(bin)
   return '"' .. bin .. '"'
 end
 
---- Prepare a command line for io.popen / os.execute.
--- On Windows these run `cmd.exe /c <cmd>`, and cmd strips the first and last
--- quote of the line when it contains more than two quotes, which breaks
--- `"python" "script.py" "arg"`. Wrapping the whole line in an extra pair of
--- quotes makes cmd strip those instead.
--- @param cmd string
--- @return string
-function M.shell_cmd(cmd)
-  return M.is_win and ('"' .. cmd .. '"') or cmd
+--- True if the ReaTC C++ extension (network output API) is loaded.
+-- @return boolean
+function M.ext_loaded()
+  return reaper.ReaTC_SendArtNetTC ~= nil
+end
+
+--- Version string reported by the extension, or nil if it is not loaded.
+-- @return string|nil
+function M.ext_version()
+  return reaper.ReaTC_GetVersion and reaper.ReaTC_GetVersion() or nil
 end
 
 --- Run a short command and capture its stdout.
@@ -139,13 +136,8 @@ M.RGN_NAME_MAX         = 64   -- must match RGN_NAME_MAX in reatc_tc.jsfx
 
 -- State
 M.state = {
-  -- Python
-  python_bin   = nil,
-  python_error = nil,
-
   -- Art-Net
   artnet_enabled        = false,
-  artnet_proc           = nil,
   dest_ip               = "2.0.0.1",
   artnet_preferred_ip   = "",  -- CIDR (e.g. "10.0.0.0/8") or "" = auto
   artnet_preferred_iface = "",  -- explicit NIC name override, "" = none
@@ -153,6 +145,7 @@ M.state = {
   framerate_type        = M.FR_EBU,
   packets_sent          = 0,
   artnet_error          = nil,
+  artnet_warning        = nil,  -- e.g. source IP bind failed (default route used)
   last_artnet_time      = 0,
 
   -- OSC
@@ -162,8 +155,8 @@ M.state = {
   osc_address          = "/tc",
   osc_preferred_ip     = "",
   osc_preferred_iface  = "",
-  osc_proc             = nil,
   osc_error            = nil,
+  osc_warning          = nil,
   last_osc_time        = 0,
   osc_packets_sent     = 0,
 
@@ -294,8 +287,8 @@ function M.is_valid_ipv4_list(list)
   return count > 0
 end
 
---- List local IPv4 interfaces by invoking reatc_netdiscover.py.
--- Output is tab-separated (iface names can contain spaces: "Wi-Fi 2").
+--- List local IPv4 interfaces via the extension (ReaTC_ListInterfaces).
+-- Rows are tab-separated (iface names can contain spaces: "Wi-Fi 2").
 -- Caches the result in `state.interfaces`. Pass `force = true` to refresh.
 -- @param force boolean re-run discovery even if cached
 -- @return table array of { ip, iface, broadcast, netmask } (possibly empty)
@@ -303,9 +296,9 @@ function M.list_interfaces(force)
   local s = M.state
   if s.interfaces and not force then return s.interfaces end
   s.interfaces = {}
-  if not s.python_bin then return s.interfaces end
+  if not reaper.ReaTC_ListInterfaces then return s.interfaces end
 
-  local out = M.exec_capture(M.quote_bin(s.python_bin) .. ' "' .. M.py_netdiscover .. '"') or ""
+  local out = reaper.ReaTC_ListInterfaces() or ""
 
   for line in out:gmatch("[^\r\n]+") do
     local ip, iface, bcast, mask = line:match("^([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)$")
