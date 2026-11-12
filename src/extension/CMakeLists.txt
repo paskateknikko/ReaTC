@@ -1,8 +1,4 @@
 cmake_minimum_required(VERSION 3.15)
-project(reaper_reatc LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Read deployment targets from shared config
 set(PLATFORMS_ENV "${CMAKE_CURRENT_SOURCE_DIR}/../../build/platforms.env")
@@ -23,10 +19,16 @@ if(NOT DEFINED WINDOWS_MIN_VERSION)
   set(WINDOWS_MIN_VERSION "10")
 endif()
 
-# Minimum macOS deployment target
-if(APPLE)
-  set(CMAKE_OSX_DEPLOYMENT_TARGET "${MACOS_DEPLOYMENT_TARGET}" CACHE STRING "Minimum macOS version")
-endif()
+# Minimum macOS deployment target. Must be set before project(): project()
+# creates an empty CMAKE_OSX_DEPLOYMENT_TARGET cache entry, after which a
+# set(... CACHE) is a no-op and the build targets the host macOS version.
+# Not FORCEd, so -DCMAKE_OSX_DEPLOYMENT_TARGET=... still overrides it.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "${MACOS_DEPLOYMENT_TARGET}" CACHE STRING "Minimum macOS version")
+
+project(reaper_reatc LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(reaper_reatc SHARED reaper_reatc.cpp reatc_net.cpp)
 

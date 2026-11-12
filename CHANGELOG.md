@@ -35,6 +35,7 @@ Versioning: `MAJOR.MINOR.PATCH[-PRE]` per [Semantic Versioning](https://semver.o
 - **Windows: Bake LTC failed** — LTC generation used the same broken quoting; now runs via `reaper.ExecProcess`, and the output folder is created with `RecursiveCreateDirectory`
 - **Windows: slow script start and console popups** — Python detection now uses `reaper.ExecProcess` (no console window, ~50 ms instead of ~6 s), tries `python` / `py` before the Microsoft Store `python3` stub, and no longer probes Unix paths
 - **Daemon restarts while typing** — editing an IP, port, address, Stream ID or interface restarts the daemon once, 0.75 s after the last change, instead of on every keystroke
+- **macOS: deployment target ignored** — `CMAKE_OSX_DEPLOYMENT_TARGET` was set after `project()`, so the extension required the build machine's macOS version instead of 10.15 (Intel) / 11.0 (Apple Silicon)
 
 ## [1.3.0-beta-2] - 2026-11-12
 
