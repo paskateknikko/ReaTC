@@ -113,6 +113,9 @@ options:gmem=ReaTC_LTC
 TC_HOUR=0; TC_MIN=1; TC_SEC=2; TC_FRAME=3;
 TC_FRAMERATE=4; TC_PLAY_STATE=5; TC_VALID=6;
 TC_WRITE_COUNTER=7; SCRIPT_ALIVE=8;
+// gmem[9]=FRAME_TIME (time_precise() when the current output frame started),
+// gmem[10]=TC_RUNNING (output TC is advancing) -- frame clock for the
+// extension's per-frame Art-Net/OSC sender
 // gmem[17]=ACTIVE_SOURCE, gmem[18]=LTC_LOCK, gmem[19]=MTC_LOCK
 // (hardcoded in gmem writes to avoid EEL2 local variable pool overflow)
 TC_OFFSET_H=20; TC_OFFSET_M=21; TC_OFFSET_S=22; TC_OFFSET_F=23; TC_OFFSET_SIGN=24;
@@ -183,6 +186,10 @@ qf_fps_t           = 1;
 out_h=0; out_m=0; out_s=0; out_f=0;
 out_valid=0; active_source=0;
 out_seq=0;
+frame_t=0;      // time_precise() at which the current output frame started
+frame_running=0;
+frame_seq=0;
+tl_phase=0;     // timeline: elapsed fraction (0..1) of the current frame
 prev_out_h=-1; prev_out_m=-1; prev_out_s=-1; prev_out_f=-1;
 src_holdoff=0;  // grace period samples before switching to lower-priority source
 
@@ -268,6 +275,7 @@ function tl_tc_from_pos(pos) local(total, ts, d, mm, tf) (
   pos = max(0, pos);
   fps_type == 2 ? (
     total = floor(pos * 30.0);
+    tl_phase = pos * 30.0 - total;
     d     = floor(total / 17982);
     mm    = total % 17982;
     tf    = total + 18*d + 2*max(0, floor((mm - 2) / 1798));
@@ -277,6 +285,7 @@ function tl_tc_from_pos(pos) local(total, ts, d, mm, tf) (
     tl_f = tf % 30;
   ) : (
     total = floor(pos * fps_int);
+    tl_phase = pos * fps_int - total;
     tl_f = total % fps_int;
     ts   = floor(total / fps_int);
     tl_s = ts % 60;
@@ -338,9 +347,11 @@ function tl_tc_region(pos) local(i, n, base, idx, sh) (
     tl_region = floor(gmem[base + 2]);
     sh = gmem[RGN_HRS_NUM] > 0.5 ? tl_region % 40 : floor(gmem[RGN_START_H]);
     // Small epsilon guards against float error landing just below a frame edge
+    tl_phase = (pos - gmem[base]) * (fps_type == 2 ? 30 : fps_int) + 0.000001;
     tl_from_frames(
       tc_to_frames(sh, floor(gmem[RGN_START_M]), floor(gmem[RGN_START_S]), floor(gmem[RGN_START_F]))
-      + floor((pos - gmem[base]) * (fps_type == 2 ? 30 : fps_int) + 0.000001));
+      + floor(tl_phase));
+    tl_phase -= floor(tl_phase);
     1;
   ) : (
     tl_region = 0;
@@ -834,6 +845,7 @@ gmem[TC_HOUR] = 0; gmem[TC_MIN] = 0; gmem[TC_SEC] = 0; gmem[TC_FRAME] = 0;
 gmem[TC_FRAMERATE] = fps_type; gmem[TC_PLAY_STATE] = 0;
 gmem[TC_VALID] = 0; gmem[TC_WRITE_COUNTER] = 0;
 gmem[17] = 0; gmem[18] = 0; gmem[19] = 0;  // ACTIVE_SOURCE, LTC_LOCK, MTC_LOCK
+gmem[9] = 0; gmem[10] = 0;                  // FRAME_TIME, TC_RUNNING
 
 
 @serialize
@@ -977,6 +989,19 @@ enc_active = out_valid;
   prev_out_h = out_h; prev_out_m = out_m; prev_out_s = out_s; prev_out_f = out_f;
 );
 
+// Frame clock for the extension: when the current output frame started, and
+// whether TC is advancing. Timeline knows the exact sub-frame phase; LTC/MTC
+// stamp the block in which a new frame appeared. Running = a new frame
+// arrived within the last 1.5 frames (drops as soon as LTC/MTC stops).
+blk_t = time_precise();
+active_source == SRC_TIMELINE ? (
+  frame_t = blk_t - tl_phase / (fps_type == 2 ? 30 : fps_int);
+) : out_seq != frame_seq ? (
+  frame_t = blk_t;
+);
+frame_seq = out_seq;
+frame_running = out_valid && (blk_t - frame_t) < 1.5 / fps_real;
+
 // ═══════════════════════════════════════════════════════════════════════
 // MTC OUTPUT
 // ═══════════════════════════════════════════════════════════════════════
@@ -1056,8 +1081,11 @@ slider9 > 0.5 ? (
   gmem[TC_FRAME]         = out_f;
   gmem[TC_PLAY_STATE]    = is_playing;
   gmem[TC_VALID]         = out_valid;
+  gmem[9]                = frame_t;        // FRAME_TIME
+  gmem[10]               = frame_running;  // TC_RUNNING
 ) : (
   gmem[TC_VALID]         = 0;
+  gmem[10]               = 0;
 );
 
 // Mirror to sliders for display

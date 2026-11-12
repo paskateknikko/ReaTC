@@ -30,14 +30,17 @@ project(reaper_reatc LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_library(reaper_reatc SHARED reaper_reatc.cpp reatc_net.cpp)
+add_library(reaper_reatc SHARED reaper_reatc.cpp reatc_net.cpp reatc_output.cpp)
+
+find_package(Threads REQUIRED)
+target_link_libraries(reaper_reatc PRIVATE Threads::Threads)
 
 # Version reported by ReaTC_GetVersion() (CI passes the release tag)
 set(REATC_VERSION "DEV" CACHE STRING "ReaTC version string")
 target_compile_definitions(reaper_reatc PRIVATE REATC_VERSION="${REATC_VERSION}")
 
 if(WIN32)
-  target_link_libraries(reaper_reatc PRIVATE ws2_32 iphlpapi)
+  target_link_libraries(reaper_reatc PRIVATE ws2_32 iphlpapi winmm)
 endif()
 
 # Windows minimum version → _WIN32_WINNT hex value

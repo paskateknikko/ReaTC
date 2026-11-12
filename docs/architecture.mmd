@@ -39,10 +39,13 @@ flowchart TD
 
         subgraph CPP_EXT ["🔌 C++ Extension · reaper_reatc"]
             direction LR
-            ARTNET_TX["ReaTC_SendArtNetTC"]:::extension
-            OSC_TX["ReaTC_SendOSCTC"]:::extension
+            FRAME_CLOCK["Frame clock\n(sender thread)"]:::extension
+            ARTNET_TX["Art-Net TimeCode"]:::extension
+            OSC_TX["OSC"]:::extension
+            FRAME_CLOCK --> ARTNET_TX
+            FRAME_CLOCK --> OSC_TX
         end
-        GMEM_READ -- "ReaScript API\n(per frame)" --> CPP_EXT
+        GMEM_READ -- "ReaScript API\nReaTC_SetTC (per defer)" --> CPP_EXT
         CPP_EXT -- "ExtState\nReaTC_CMD" --> LUA
         LUA -- "ExtState\nReaTC_STATE" --> CPP_EXT
 

@@ -14,9 +14,15 @@
  *
  *   ReaTC_GetVersion()       extension version string
  *   ReaTC_ListInterfaces()   local IPv4 interfaces (tab-separated rows)
- *   ReaTC_SendArtNetTC(...)  send one Art-Net TimeCode packet
- *   ReaTC_SendOSCTC(...)     send one OSC timecode message
- *   ReaTC_GetLastError(kind) last error/warning for "artnet" or "osc"
+ *   ReaTC_SetTC(...)             TC the outputs follow (per defer cycle)
+ *   ReaTC_SetArtNetOutput(...)   Art-Net settings
+ *   ReaTC_SetOSCOutput(...)      OSC settings
+ *   ReaTC_GetPacketCount(kind)   packets sent, "artnet" or "osc"
+ *   ReaTC_GetLastError(kind)     last send error
+ *   ReaTC_GetLastWarning(kind)   last bind warning
+ *
+ * Packets are sent from a background thread, one per frame on the frame
+ * boundary (reatc_output.h), independent of the script's ~30 Hz loop.
  *
  * Copyright (c) 2025 Tuukka Aimasmäki. MIT License — see LICENSE.
  */
@@ -47,7 +53,7 @@
 #include <string>
 
 #include "reatc_net.h"
-#include "reatc_packets.h"
+#include "reatc_output.h"
 
 #ifndef REATC_VERSION
 #define REATC_VERSION "DEV"
@@ -275,14 +281,18 @@ static int toggle_action(int command_id)
 // ---------------------------------------------------------------------------
 // ReaScript API: network output
 // ---------------------------------------------------------------------------
-// All functions run on REAPER's main thread (called from the Lua defer loop),
-// so no locking is needed. Sockets live for the session and are rebuilt when
-// the source IP changes.
+// The script calls these from REAPER's main thread every defer cycle; the
+// packets themselves are sent by g_sender's thread, one per frame.
 
-static reatc::UdpSender g_artnet;
-static reatc::UdpSender g_osc;
+static reatc::OutputSender g_sender;
 static std::string g_ifaces_buf;  // backing store for ReaTC_ListInterfaces
-static std::string g_err_buf;     // backing store for ReaTC_GetLastError
+static std::string g_str_buf;     // backing store for ReaTC_GetLast*
+
+static reatc::OutputKind kind_of(const char* kind)
+{
+  return (kind && std::strcmp(kind, "osc") == 0) ? reatc::OutputKind::Osc
+                                                  : reatc::OutputKind::ArtNet;
+}
 
 static const char* ReaTC_GetVersion() { return REATC_VERSION; }
 
@@ -292,35 +302,47 @@ static const char* ReaTC_ListInterfaces()
   return g_ifaces_buf.c_str();
 }
 
-static int ReaTC_SendArtNetTC(const char* dests, const char* srcIP, int streamID,
-                              int h, int m, int s, int f, int type)
+static void ReaTC_SetTC(bool valid, int h, int m, int s, int f, int type,
+                        bool running, double age)
 {
-  if (!reatc::tc_in_range(h, m, s, f, type)) return -1;
-  uint8_t pkt[reatc::ARTNET_TC_LEN];
-  reatc::build_artnet_timecode(pkt, h, m, s, f, type, streamID);
-  return g_artnet.send(dests ? dests : "", reatc::ARTNET_PORT,
-                       srcIP ? srcIP : "", pkt, sizeof(pkt));
+  g_sender.set_tc(valid, h, m, s, f, type, running, age);
 }
 
-static int ReaTC_SendOSCTC(const char* destIP, int port, const char* address,
-                           const char* srcIP, int h, int m, int s, int f, int type)
+static void ReaTC_SetArtNetOutput(bool enabled, const char* dests,
+                                  const char* srcIP, int streamID)
 {
-  if (!reatc::tc_in_range(h, m, s, f, type)) return -1;
-  if (!address || address[0] != '/') return -1;
-  const auto pkt = reatc::build_osc_timecode(address, h, m, s, f, type);
-  return g_osc.send(destIP ? destIP : "", port, srcIP ? srcIP : "",
-                    pkt.data(), pkt.size());
+  g_sender.set_artnet(enabled, dests ? dests : "", srcIP ? srcIP : "", streamID);
+}
+
+static void ReaTC_SetOSCOutput(bool enabled, const char* destIP, int port,
+                               const char* address, const char* srcIP)
+{
+  g_sender.set_osc(enabled, destIP ? destIP : "", port, address ? address : "",
+                   srcIP ? srcIP : "");
+}
+
+static int ReaTC_GetPacketCount(const char* kind)
+{
+  return g_sender.packets(kind_of(kind));
 }
 
 static const char* ReaTC_GetLastError(const char* kind)
 {
-  if (kind && std::strcmp(kind, "osc") == 0) g_err_buf = g_osc.last_error();
-  else g_err_buf = g_artnet.last_error();
-  return g_err_buf.c_str();
+  g_str_buf = g_sender.last_error(kind_of(kind));
+  return g_str_buf.c_str();
 }
 
-// vararg wrappers: ReaScript passes ints as intptr_t-sized values in arglist.
+static const char* ReaTC_GetLastWarning(const char* kind)
+{
+  g_str_buf = g_sender.last_warning(kind_of(kind));
+  return g_str_buf.c_str();
+}
+
+// vararg wrappers: ReaScript passes ints/bools as intptr_t-sized values and
+// doubles as a pointer to the double.
 #define ARG_I(i) static_cast<int>(reinterpret_cast<intptr_t>(arglist[i]))
+#define ARG_B(i) (reinterpret_cast<intptr_t>(arglist[i]) != 0)
+#define ARG_D(i) (arglist[i] ? *static_cast<double*>(arglist[i]) : 0.0)
 #define ARG_S(i) static_cast<const char*>(arglist[i])
 
 static void* va_GetVersion(void**, int)
@@ -331,24 +353,39 @@ static void* va_ListInterfaces(void**, int)
 {
   return (void*)ReaTC_ListInterfaces();
 }
-static void* va_SendArtNetTC(void** arglist, int n)
+static void* va_SetTC(void** arglist, int n)
 {
-  if (n < 8) return (void*)(intptr_t)-1;
-  return (void*)(intptr_t)ReaTC_SendArtNetTC(ARG_S(0), ARG_S(1), ARG_I(2),
-      ARG_I(3), ARG_I(4), ARG_I(5), ARG_I(6), ARG_I(7));
+  if (n >= 8)
+    ReaTC_SetTC(ARG_B(0), ARG_I(1), ARG_I(2), ARG_I(3), ARG_I(4), ARG_I(5),
+                ARG_B(6), ARG_D(7));
+  return nullptr;
 }
-static void* va_SendOSCTC(void** arglist, int n)
+static void* va_SetArtNetOutput(void** arglist, int n)
 {
-  if (n < 9) return (void*)(intptr_t)-1;
-  return (void*)(intptr_t)ReaTC_SendOSCTC(ARG_S(0), ARG_I(1), ARG_S(2), ARG_S(3),
-      ARG_I(4), ARG_I(5), ARG_I(6), ARG_I(7), ARG_I(8));
+  if (n >= 4) ReaTC_SetArtNetOutput(ARG_B(0), ARG_S(1), ARG_S(2), ARG_I(3));
+  return nullptr;
+}
+static void* va_SetOSCOutput(void** arglist, int n)
+{
+  if (n >= 5) ReaTC_SetOSCOutput(ARG_B(0), ARG_S(1), ARG_I(2), ARG_S(3), ARG_S(4));
+  return nullptr;
+}
+static void* va_GetPacketCount(void** arglist, int n)
+{
+  return (void*)(intptr_t)ReaTC_GetPacketCount(n > 0 ? ARG_S(0) : nullptr);
 }
 static void* va_GetLastError(void** arglist, int n)
 {
   return (void*)ReaTC_GetLastError(n > 0 ? ARG_S(0) : nullptr);
 }
+static void* va_GetLastWarning(void** arglist, int n)
+{
+  return (void*)ReaTC_GetLastWarning(n > 0 ? ARG_S(0) : nullptr);
+}
 
 #undef ARG_I
+#undef ARG_B
+#undef ARG_D
 #undef ARG_S
 
 struct ApiFunc {
@@ -364,22 +401,33 @@ static const ApiFunc g_api[] = {
   { "ReaTC_ListInterfaces", (void*)ReaTC_ListInterfaces, (void*)va_ListInterfaces,
     "const char*\0\0\0Local up, non-loopback IPv4 interfaces, one per line: "
     "ip<TAB>name<TAB>broadcast-or-dash<TAB>netmask." },
-  { "ReaTC_SendArtNetTC", (void*)ReaTC_SendArtNetTC, (void*)va_SendArtNetTC,
-    "int\0const char*,const char*,int,int,int,int,int,int\0"
-    "dests,srcIP,streamID,hours,minutes,seconds,frames,type\0"
-    "Send one Art-Net TimeCode packet to each comma-separated destination. "
-    "srcIP binds the socket to a local IPv4 (empty = default route). "
-    "type: 0=24, 1=25, 2=29.97DF, 3=30. Returns packets sent, or -1 on error "
-    "(see ReaTC_GetLastError(\"artnet\"))." },
-  { "ReaTC_SendOSCTC", (void*)ReaTC_SendOSCTC, (void*)va_SendOSCTC,
-    "int\0const char*,int,const char*,const char*,int,int,int,int,int\0"
-    "destIP,port,address,srcIP,hours,minutes,seconds,frames,type\0"
-    "Send one OSC message '<address> ,iiiii H M S F type'. Returns 1, or -1 on "
-    "error (see ReaTC_GetLastError(\"osc\"))." },
+  { "ReaTC_SetTC", (void*)ReaTC_SetTC, (void*)va_SetTC,
+    "void\0bool,int,int,int,int,int,bool,double\0"
+    "valid,hours,minutes,seconds,frames,type,running,age\0"
+    "Set the timecode the network outputs follow. Call every defer cycle: "
+    "output stops if no update arrives for 1 s. While running, the extension "
+    "advances TC itself and sends one packet per frame on the frame boundary; "
+    "age = seconds since the current frame started. "
+    "type: 0=24, 1=25, 2=29.97DF, 3=30." },
+  { "ReaTC_SetArtNetOutput", (void*)ReaTC_SetArtNetOutput, (void*)va_SetArtNetOutput,
+    "void\0bool,const char*,const char*,int\0enabled,dests,srcIP,streamID\0"
+    "Art-Net TimeCode output settings. dests: one IPv4 or a comma-separated "
+    "list. srcIP binds the socket to a local IPv4 (empty = default route)." },
+  { "ReaTC_SetOSCOutput", (void*)ReaTC_SetOSCOutput, (void*)va_SetOSCOutput,
+    "void\0bool,const char*,int,const char*,const char*\0"
+    "enabled,destIP,port,address,srcIP\0"
+    "OSC output settings. Sends '<address> ,iiiii H M S F type' per frame." },
+  { "ReaTC_GetPacketCount", (void*)ReaTC_GetPacketCount, (void*)va_GetPacketCount,
+    "int\0const char*\0kind\0"
+    "Packets sent since the output was enabled, for kind \"artnet\" or \"osc\"." },
   { "ReaTC_GetLastError", (void*)ReaTC_GetLastError, (void*)va_GetLastError,
     "const char*\0const char*\0kind\0"
-    "Last error (after a failed send) or bind warning (after a successful send) "
-    "for kind \"artnet\" or \"osc\"; empty if none." },
+    "Error from the most recent send for kind \"artnet\" or \"osc\"; "
+    "empty if it succeeded." },
+  { "ReaTC_GetLastWarning", (void*)ReaTC_GetLastWarning, (void*)va_GetLastWarning,
+    "const char*\0const char*\0kind\0"
+    "Bind warning from the most recent successful send (source IP could not "
+    "be bound, default route used); empty if none." },
 };
 
 static void register_api(bool add)
@@ -416,8 +464,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
 
     // Network output: unregister API, close sockets
     register_api(false);
-    g_artnet.close();
-    g_osc.close();
+    g_sender.stop();
     reatc::net_shutdown();
 
     // Clean up cached script registrations
@@ -493,6 +540,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
 
   // ReaScript API for network output (Art-Net / OSC / interface discovery)
   reatc::net_init();
+  g_sender.start();
   register_api(true);
 
   // Register JSFX slider polling timer (only if TrackFX API is available)

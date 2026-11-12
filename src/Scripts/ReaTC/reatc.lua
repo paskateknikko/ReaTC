@@ -30,7 +30,7 @@
 --
 --- Entry point for ReaTC. Initializes submodules, attaches to JSFX gmem,
 -- and runs a deferred main loop that: reads TC from gmem, polls for
--- ExtState toggle commands from the C++ extension, and sends network output.
+-- ExtState toggle commands from the C++ extension, and feeds network output.
 -- TC sources and outputs are configured in the ReaTC Timecode Converter JSFX.
 
 local function check_reaimgui()
@@ -82,6 +82,7 @@ end
 local function loop()
   if not ui.draw_ui() then
     -- Window closed — clean up
+    outputs.shutdown()
     core.save_settings()
     return  -- do NOT defer again
   end
@@ -123,12 +124,12 @@ local function loop()
   reaper.SetExtState("ReaTC_STATE", "artnet", s.artnet_enabled and "1" or "0", false)
   reaper.SetExtState("ReaTC_STATE", "osc",    s.osc_enabled    and "1" or "0", false)
 
-  -- Send to network outputs
-  outputs.send_artnet()
-  outputs.send_osc()
+  -- Hand TC + settings to the extension (it sends one packet per frame)
+  outputs.update()
 
   reaper.defer(loop)
 end
 
 init()
+reaper.atexit(outputs.shutdown)  -- also stop output if the script is terminated
 loop()

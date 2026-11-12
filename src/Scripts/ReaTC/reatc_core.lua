@@ -66,7 +66,7 @@ end
 --- True if the ReaTC C++ extension (network output API) is loaded.
 -- @return boolean
 function M.ext_loaded()
-  return reaper.ReaTC_SendArtNetTC ~= nil
+  return reaper.ReaTC_SetTC ~= nil
 end
 
 --- Version string reported by the extension, or nil if it is not loaded.
@@ -113,6 +113,8 @@ M.GMEM_TC_FRAMERATE    = 4
 M.GMEM_TC_VALID        = 6
 M.GMEM_TC_WRITE_COUNTER = 7
 M.GMEM_SCRIPT_ALIVE    = 8
+M.GMEM_FRAME_TIME      = 9   -- time_precise() when the current frame started
+M.GMEM_TC_RUNNING      = 10  -- 1 while output TC is advancing
 M.GMEM_ACTIVE_SOURCE   = 17
 M.GMEM_TC_OFFSET_H     = 20
 M.GMEM_TC_OFFSET_M     = 21
@@ -146,7 +148,6 @@ M.state = {
   packets_sent          = 0,
   artnet_error          = nil,
   artnet_warning        = nil,  -- e.g. source IP bind failed (default route used)
-  last_artnet_time      = 0,
 
   -- OSC
   osc_enabled          = false,
@@ -157,7 +158,6 @@ M.state = {
   osc_preferred_iface  = "",
   osc_error            = nil,
   osc_warning          = nil,
-  last_osc_time        = 0,
   osc_packets_sent     = 0,
 
   -- Network interface discovery (populated lazily by list_interfaces())
@@ -166,6 +166,8 @@ M.state = {
   -- Active TC (read from gmem, written by JSFX)
   tc_h = 0, tc_m = 0, tc_s = 0, tc_f = 0,
   tc_valid       = false,
+  tc_running     = false,  -- TC advancing (extension sends every frame itself)
+  tc_frame_time  = 0,      -- time_precise() when the current frame started
   active_source  = 0,  -- SRC_NONE/LTC/MTC/TIMELINE
 
   -- JSFX detection
@@ -219,8 +221,9 @@ function M.find_python()
 end
 
 --- Read active timecode from gmem shared memory (written by the JSFX).
--- Updates `state.tc_h/m/s/f`, `state.tc_valid`, `state.active_source`,
--- `state.framerate_type`, and `state.jsfx_detected`.
+-- Updates `state.tc_h/m/s/f`, `state.tc_valid`, `state.tc_running`,
+-- `state.tc_frame_time`, `state.active_source`, `state.framerate_type`,
+-- and `state.jsfx_detected`.
 function M.update_tc_from_gmem()
   local s = M.state
   s.tc_h = math.floor(reaper.gmem_read(M.GMEM_TC_HOUR))
@@ -229,6 +232,8 @@ function M.update_tc_from_gmem()
   s.tc_f = math.floor(reaper.gmem_read(M.GMEM_TC_FRAME))
   s.framerate_type = math.floor(reaper.gmem_read(M.GMEM_TC_FRAMERATE))
   s.tc_valid = reaper.gmem_read(M.GMEM_TC_VALID) > 0.5
+  s.tc_running = s.tc_valid and reaper.gmem_read(M.GMEM_TC_RUNNING) > 0.5
+  s.tc_frame_time = reaper.gmem_read(M.GMEM_FRAME_TIME)
   s.active_source = math.floor(reaper.gmem_read(M.GMEM_ACTIVE_SOURCE))
 
   -- JSFX detection: TC_WRITE_COUNTER increments every @block

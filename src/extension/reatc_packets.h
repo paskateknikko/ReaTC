@@ -26,6 +26,65 @@ inline bool tc_in_range(int h, int m, int s, int f, int type)
          f >= 0 && f <= 29 && type >= 0 && type <= 3;
 }
 
+/// Nominal frames per second (frame labels per second; 30 for 29.97DF).
+inline int tc_fps_nominal(int type)
+{
+  return type == TC_24 ? 24 : type == TC_25 ? 25 : 30;
+}
+
+/// Real duration of one frame in seconds (1001/30000 for 29.97DF).
+inline double tc_frame_period(int type)
+{
+  return type == TC_2997DF ? 1001.0 / 30000.0 : 1.0 / tc_fps_nominal(type);
+}
+
+/// Frames in the full 0-39 hour range (LTC BCD max), where TC wraps to 0.
+inline int64_t tc_wrap_frames(int type)
+{
+  // 29.97DF drops 2 labels per minute except every 10th: 17982 per 10 min.
+  return type == TC_2997DF ? int64_t(40) * 6 * 17982
+                           : int64_t(40) * 3600 * tc_fps_nominal(type);
+}
+
+/// H:M:S:F -> frame count (drop-frame aware: dropped labels are not counted).
+/// Same arithmetic as tc_to_frames() in reatc_tc.jsfx.
+inline int64_t tc_to_frames(int h, int m, int s, int f, int type)
+{
+  if (type == TC_2997DF) {
+    const int64_t mt = int64_t(h) * 60 + m;
+    return int64_t(h) * 108000 + int64_t(m) * 1800 + s * 30 + f -
+           2 * (mt - mt / 10);
+  }
+  const int fps = tc_fps_nominal(type);
+  return ((int64_t(h) * 60 + m) * 60 + s) * fps + f;
+}
+
+/// Frame count -> H:M:S:F, wrapping at 40 hours (inverse of tc_to_frames).
+/// Same arithmetic as tl_from_frames() in reatc_tc.jsfx.
+inline void frames_to_tc(int64_t total, int type, int& h, int& m, int& s, int& f)
+{
+  const int64_t wrap = tc_wrap_frames(type);
+  total %= wrap;
+  if (total < 0) total += wrap;
+  if (type == TC_2997DF) {
+    const int64_t d = total / 17982;
+    const int64_t mm = total % 17982;
+    const int64_t tf = total + 18 * d + 2 * (mm >= 2 ? (mm - 2) / 1798 : 0);
+    h = int(tf / 108000 % 40);
+    m = int(tf / 1800 % 60);
+    s = int(tf / 30 % 60);
+    f = int(tf % 30);
+    return;
+  }
+  const int fps = tc_fps_nominal(type);
+  f = int(total % fps);
+  int64_t ts = total / fps;
+  s = int(ts % 60);
+  ts /= 60;
+  m = int(ts % 60);
+  h = int(ts / 60 % 40);
+}
+
 constexpr std::size_t ARTNET_TC_LEN = 19;
 constexpr int ARTNET_PORT = 6454;
 
